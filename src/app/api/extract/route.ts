@@ -36,6 +36,7 @@ export async function POST(request: NextRequest) {
       fileSize: file.size,
       imageCount: images.length,
       images,
+      originalHtml: htmlContent,
     });
   } catch (error) {
     console.error("Extraction error:", error);
