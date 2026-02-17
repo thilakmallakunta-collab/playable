@@ -9,7 +9,7 @@ import { ExtractedImage } from "@/lib/extractImages";
 
 export default function Home() {
   const [apiKey, setApiKey] = useState("");
-  const [provider, setProvider] = useState<AIProvider>("gemini");
+  const [provider, setProvider] = useState<AIProvider>("groq");
   const [isLoading, setIsLoading] = useState(false);
   const [images, setImages] = useState<ExtractedImage[]>([]);
   const [fileName, setFileName] = useState("");
@@ -131,7 +131,7 @@ export default function Home() {
               </h2>
               <p className="text-gray-400 max-w-lg mx-auto">
                 Upload a playable ad HTML file to extract all embedded images.
-                Then describe any image using AI vision capabilities.
+                Then describe any image using AI vision — choose Groq (free), Gemini (free), or OpenAI.
               </p>
             </div>
 

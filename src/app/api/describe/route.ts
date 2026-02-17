@@ -53,6 +53,36 @@ async function describeWithOpenAI(apiKey: string, imageDataUri: string) {
   };
 }
 
+async function describeWithGroq(apiKey: string, imageDataUri: string) {
+  const groq = new OpenAI({
+    apiKey,
+    baseURL: "https://api.groq.com/openai/v1",
+  });
+
+  const response = await groq.chat.completions.create({
+    model: "llama-3.2-90b-vision-preview",
+    max_tokens: 4096,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: USER_PROMPT },
+          { type: "image_url", image_url: { url: imageDataUri } },
+        ],
+      },
+    ],
+  });
+
+  return {
+    description:
+      response.choices[0]?.message?.content ||
+      "No description could be generated.",
+    model: response.model,
+    tokens: response.usage?.total_tokens,
+  };
+}
+
 async function describeWithGemini(apiKey: string, imageDataUri: string) {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
@@ -89,11 +119,17 @@ async function describeWithGemini(apiKey: string, imageDataUri: string) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { apiKey, imageDataUri, provider = "gemini" } = body;
+    const { apiKey, imageDataUri, provider = "groq" } = body;
+
+    const providerNames: Record<string, string> = {
+      groq: "Groq",
+      gemini: "Google Gemini",
+      openai: "OpenAI",
+    };
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: `${provider === "gemini" ? "Google Gemini" : "OpenAI"} API key is required` },
+        { error: `${providerNames[provider] || provider} API key is required` },
         { status: 400 }
       );
     }
@@ -109,8 +145,10 @@ export async function POST(request: NextRequest) {
 
     if (provider === "openai") {
       result = await describeWithOpenAI(apiKey, imageDataUri);
-    } else {
+    } else if (provider === "gemini") {
       result = await describeWithGemini(apiKey, imageDataUri);
+    } else {
+      result = await describeWithGroq(apiKey, imageDataUri);
     }
 
     return NextResponse.json({

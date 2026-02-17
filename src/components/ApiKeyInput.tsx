@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 
-export type AIProvider = "gemini" | "openai";
+export type AIProvider = "groq" | "gemini" | "openai";
 
 interface ApiKeyInputProps {
   onKeyChange: (key: string) => void;
@@ -10,6 +10,15 @@ interface ApiKeyInputProps {
 }
 
 const PROVIDERS = [
+  {
+    id: "groq" as AIProvider,
+    name: "Groq",
+    label: "Free",
+    labelColor: "bg-green-900/50 text-green-400",
+    placeholder: "gsk_...",
+    helpUrl: "https://console.groq.com/keys",
+    helpText: "Get a free key from Groq Console (generous free tier)",
+  },
   {
     id: "gemini" as AIProvider,
     name: "Google Gemini",
@@ -34,14 +43,14 @@ export default function ApiKeyInput({
   onKeyChange,
   onProviderChange,
 }: ApiKeyInputProps) {
-  const [provider, setProvider] = useState<AIProvider>("gemini");
+  const [provider, setProvider] = useState<AIProvider>("groq");
   const [apiKey, setApiKey] = useState("");
   const [isVisible, setIsVisible] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
 
   useEffect(() => {
     const savedProvider =
-      (localStorage.getItem("ai-provider") as AIProvider) || "gemini";
+      (localStorage.getItem("ai-provider") as AIProvider) || "groq";
     const savedKey = localStorage.getItem(`api-key-${savedProvider}`) || "";
     setProvider(savedProvider);
     onProviderChange(savedProvider);
