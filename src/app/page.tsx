@@ -4,12 +4,11 @@ import { useState, useCallback } from "react";
 import FileUpload from "@/components/FileUpload";
 import ImageGallery from "@/components/ImageGallery";
 import ImageModal from "@/components/ImageModal";
-import ApiKeyInput, { AIProvider } from "@/components/ApiKeyInput";
+import ApiKeyInput from "@/components/ApiKeyInput";
 import { ExtractedImage } from "@/lib/extractImages";
 
 export default function Home() {
   const [apiKey, setApiKey] = useState("");
-  const [provider, setProvider] = useState<AIProvider>("groq");
   const [isLoading, setIsLoading] = useState(false);
   const [images, setImages] = useState<ExtractedImage[]>([]);
   const [fileName, setFileName] = useState("");
@@ -70,7 +69,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-purple-500 to-orange-500 flex items-center justify-center">
                 <svg
                   className="w-5 h-5 text-white"
                   fill="none"
@@ -90,7 +89,7 @@ export default function Home() {
                   Playable Ads Image Tool
                 </h1>
                 <p className="text-xs text-gray-500 hidden sm:block">
-                  Extract & describe images from playable ad files
+                  Extract & describe images with Claude Vision
                 </p>
               </div>
             </div>
@@ -131,7 +130,7 @@ export default function Home() {
               </h2>
               <p className="text-gray-400 max-w-lg mx-auto">
                 Upload a playable ad HTML file to extract all embedded images.
-                Then describe any image using AI vision — choose Groq (free), Gemini (free), or OpenAI.
+                Then describe any image in detail using Claude Vision.
               </p>
             </div>
 
@@ -142,7 +141,7 @@ export default function Home() {
                   1
                 </div>
                 <p className="text-xs text-gray-400">
-                  Choose AI provider & enter key
+                  Enter your Claude API key
                 </p>
               </div>
               <div className="text-center p-4">
@@ -163,10 +162,7 @@ export default function Home() {
               </div>
             </div>
 
-            <ApiKeyInput
-              onKeyChange={setApiKey}
-              onProviderChange={setProvider}
-            />
+            <ApiKeyInput onKeyChange={setApiKey} />
 
             <FileUpload onUpload={handleUpload} isLoading={isLoading} />
 
@@ -196,12 +192,8 @@ export default function Home() {
         {/* Gallery section */}
         {images.length > 0 && (
           <div>
-            {/* Compact API key when gallery is shown */}
             <div className="mb-6">
-              <ApiKeyInput
-                onKeyChange={setApiKey}
-                onProviderChange={setProvider}
-              />
+              <ApiKeyInput onKeyChange={setApiKey} />
             </div>
 
             <ImageGallery
@@ -218,7 +210,6 @@ export default function Home() {
         <ImageModal
           image={selectedImage}
           apiKey={apiKey}
-          provider={provider}
           onClose={() => setSelectedImage(null)}
         />
       )}

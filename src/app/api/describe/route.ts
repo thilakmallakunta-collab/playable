@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Anthropic from "@anthropic-ai/sdk";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -26,110 +25,14 @@ Be extremely thorough and descriptive. Write in clear, professional language.`;
 const USER_PROMPT =
   "Please provide the most detailed and elaborate description possible of this image from a playable ad:";
 
-async function describeWithOpenAI(apiKey: string, imageDataUri: string) {
-  const openai = new OpenAI({ apiKey });
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    max_tokens: 4096,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: USER_PROMPT },
-          { type: "image_url", image_url: { url: imageDataUri, detail: "high" } },
-        ],
-      },
-    ],
-  });
-
-  return {
-    description:
-      response.choices[0]?.message?.content ||
-      "No description could be generated.",
-    model: response.model,
-    tokens: response.usage?.total_tokens,
-  };
-}
-
-async function describeWithGroq(apiKey: string, imageDataUri: string) {
-  const groq = new OpenAI({
-    apiKey,
-    baseURL: "https://api.groq.com/openai/v1",
-  });
-
-  const response = await groq.chat.completions.create({
-    model: "llama-3.2-90b-vision-preview",
-    max_tokens: 4096,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: USER_PROMPT },
-          { type: "image_url", image_url: { url: imageDataUri } },
-        ],
-      },
-    ],
-  });
-
-  return {
-    description:
-      response.choices[0]?.message?.content ||
-      "No description could be generated.",
-    model: response.model,
-    tokens: response.usage?.total_tokens,
-  };
-}
-
-async function describeWithGemini(apiKey: string, imageDataUri: string) {
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
-  // Extract base64 data and mime type from data URI
-  const matches = imageDataUri.match(/^data:(image\/[^;]+);base64,(.+)$/);
-  if (!matches) {
-    throw new Error("Invalid image data URI format");
-  }
-  const mimeType = matches[1];
-  const base64Data = matches[2];
-
-  const result = await model.generateContent([
-    { text: SYSTEM_PROMPT + "\n\n" + USER_PROMPT },
-    {
-      inlineData: {
-        mimeType,
-        data: base64Data,
-      },
-    },
-  ]);
-
-  const response = result.response;
-  const description = response.text() || "No description could be generated.";
-  const tokens = response.usageMetadata?.totalTokenCount;
-
-  return {
-    description,
-    model: "gemini-2.0-flash",
-    tokens,
-  };
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { apiKey, imageDataUri, provider = "groq" } = body;
-
-    const providerNames: Record<string, string> = {
-      groq: "Groq",
-      gemini: "Google Gemini",
-      openai: "OpenAI",
-    };
+    const { apiKey, imageDataUri } = body;
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: `${providerNames[provider] || provider} API key is required` },
+        { error: "Anthropic API key is required" },
         { status: 400 }
       );
     }
@@ -141,53 +44,79 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let result;
-
-    if (provider === "openai") {
-      result = await describeWithOpenAI(apiKey, imageDataUri);
-    } else if (provider === "gemini") {
-      result = await describeWithGemini(apiKey, imageDataUri);
-    } else {
-      result = await describeWithGroq(apiKey, imageDataUri);
+    // Extract base64 data and mime type from data URI
+    const matches = imageDataUri.match(/^data:(image\/[^;]+);base64,(.+)$/);
+    if (!matches) {
+      return NextResponse.json(
+        { error: "Invalid image data format" },
+        { status: 400 }
+      );
     }
+    const mediaType = matches[1] as "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+    const base64Data = matches[2];
+
+    const client = new Anthropic({ apiKey });
+
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: mediaType,
+                data: base64Data,
+              },
+            },
+            {
+              type: "text",
+              text: USER_PROMPT,
+            },
+          ],
+        },
+      ],
+    });
+
+    const textBlock = response.content.find((block) => block.type === "text");
+    const description = textBlock && "text" in textBlock
+      ? textBlock.text
+      : "No description could be generated.";
 
     return NextResponse.json({
       success: true,
-      ...result,
+      description,
+      model: response.model,
+      tokens: response.usage.input_tokens + response.usage.output_tokens,
     });
   } catch (error: unknown) {
     console.error("Description error:", error);
 
-    // OpenAI-specific errors
-    if (error instanceof OpenAI.AuthenticationError) {
+    const message =
+      error instanceof Error ? error.message : "Failed to generate description";
+
+    if (message.includes("authentication") || message.includes("api_key") || message.includes("401")) {
       return NextResponse.json(
-        { error: "Invalid API key. Please check your key and try again." },
+        { error: "Invalid Anthropic API key. Please check your key and try again." },
         { status: 401 }
       );
     }
 
-    if (error instanceof OpenAI.RateLimitError) {
+    if (message.includes("rate_limit") || message.includes("429")) {
       return NextResponse.json(
         { error: "Rate limit exceeded. Please wait a moment and try again." },
         { status: 429 }
       );
     }
 
-    const message =
-      error instanceof Error ? error.message : "Failed to generate description";
-
-    // Check for common Gemini errors
-    if (message.includes("API_KEY_INVALID") || message.includes("API key not valid")) {
+    if (message.includes("overloaded") || message.includes("529")) {
       return NextResponse.json(
-        { error: "Invalid API key. Please check your key and try again." },
-        { status: 401 }
-      );
-    }
-
-    if (message.includes("RESOURCE_EXHAUSTED") || message.includes("quota")) {
-      return NextResponse.json(
-        { error: "Rate limit / quota exceeded. Please wait a moment and try again." },
-        { status: 429 }
+        { error: "Claude is currently overloaded. Please try again in a moment." },
+        { status: 529 }
       );
     }
 
