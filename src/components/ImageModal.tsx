@@ -2,22 +2,26 @@
 
 import { useState, useCallback } from "react";
 import { ExtractedImage, formatFileSize } from "@/lib/extractImages";
+import { AIProvider } from "./ApiKeyInput";
 
 interface ImageModalProps {
   image: ExtractedImage;
   apiKey: string;
+  provider: AIProvider;
   onClose: () => void;
 }
 
 export default function ImageModal({
   image,
   apiKey,
+  provider,
   onClose,
 }: ImageModalProps) {
   const [description, setDescription] = useState<string | null>(null);
   const [isDescribing, setIsDescribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState<number | null>(null);
+  const [modelUsed, setModelUsed] = useState<string | null>(null);
 
   const handleDownload = useCallback(() => {
     const link = document.createElement("a");
@@ -32,7 +36,7 @@ export default function ImageModal({
   const handleDescribe = useCallback(async () => {
     if (!apiKey) {
       setError(
-        "Please enter your OpenAI API key in the settings above first."
+        `Please enter your ${provider === "gemini" ? "Google Gemini" : "OpenAI"} API key in the settings above first.`
       );
       return;
     }
@@ -48,6 +52,7 @@ export default function ImageModal({
         body: JSON.stringify({
           apiKey,
           imageDataUri: image.dataUri,
+          provider,
         }),
       });
 
@@ -59,6 +64,7 @@ export default function ImageModal({
 
       setDescription(data.description);
       setTokenCount(data.tokens || null);
+      setModelUsed(data.model || null);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to describe image"
@@ -66,7 +72,7 @@ export default function ImageModal({
     } finally {
       setIsDescribing(false);
     }
-  }, [apiKey, image.dataUri]);
+  }, [apiKey, image.dataUri, provider]);
 
   const handleCopyDescription = useCallback(() => {
     if (description) {
@@ -88,9 +94,7 @@ export default function ImageModal({
             <h2 className="text-lg font-semibold text-gray-100">
               Image Details
             </h2>
-            <span className="text-xs text-gray-500 font-mono">
-              {image.id}
-            </span>
+            <span className="text-xs text-gray-500 font-mono">{image.id}</span>
           </div>
           <button
             onClick={onClose}
@@ -250,6 +254,11 @@ export default function ImageModal({
                   <h3 className="text-sm font-semibold text-purple-400">
                     AI Description
                   </h3>
+                  {modelUsed && (
+                    <span className="text-[10px] text-gray-500 bg-gray-700/50 px-1.5 py-0.5 rounded">
+                      {modelUsed}
+                    </span>
+                  )}
                   {tokenCount && (
                     <span className="text-[10px] text-gray-500">
                       {tokenCount} tokens

@@ -4,11 +4,12 @@ import { useState, useCallback } from "react";
 import FileUpload from "@/components/FileUpload";
 import ImageGallery from "@/components/ImageGallery";
 import ImageModal from "@/components/ImageModal";
-import ApiKeyInput from "@/components/ApiKeyInput";
+import ApiKeyInput, { AIProvider } from "@/components/ApiKeyInput";
 import { ExtractedImage } from "@/lib/extractImages";
 
 export default function Home() {
   const [apiKey, setApiKey] = useState("");
+  const [provider, setProvider] = useState<AIProvider>("gemini");
   const [isLoading, setIsLoading] = useState(false);
   const [images, setImages] = useState<ExtractedImage[]>([]);
   const [fileName, setFileName] = useState("");
@@ -130,7 +131,7 @@ export default function Home() {
               </h2>
               <p className="text-gray-400 max-w-lg mx-auto">
                 Upload a playable ad HTML file to extract all embedded images.
-                Then describe any image using OpenAI&apos;s vision capabilities.
+                Then describe any image using AI vision capabilities.
               </p>
             </div>
 
@@ -141,7 +142,7 @@ export default function Home() {
                   1
                 </div>
                 <p className="text-xs text-gray-400">
-                  Enter your OpenAI API key
+                  Choose AI provider & enter key
                 </p>
               </div>
               <div className="text-center p-4">
@@ -162,7 +163,10 @@ export default function Home() {
               </div>
             </div>
 
-            <ApiKeyInput onKeyChange={setApiKey} />
+            <ApiKeyInput
+              onKeyChange={setApiKey}
+              onProviderChange={setProvider}
+            />
 
             <FileUpload onUpload={handleUpload} isLoading={isLoading} />
 
@@ -194,7 +198,10 @@ export default function Home() {
           <div>
             {/* Compact API key when gallery is shown */}
             <div className="mb-6">
-              <ApiKeyInput onKeyChange={setApiKey} />
+              <ApiKeyInput
+                onKeyChange={setApiKey}
+                onProviderChange={setProvider}
+              />
             </div>
 
             <ImageGallery
@@ -211,6 +218,7 @@ export default function Home() {
         <ImageModal
           image={selectedImage}
           apiKey={apiKey}
+          provider={provider}
           onClose={() => setSelectedImage(null)}
         />
       )}
