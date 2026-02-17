@@ -2,17 +2,49 @@
 
 import { useState, useEffect } from "react";
 
+export type AIProvider = "groq" | "claude";
+
 interface ApiKeyInputProps {
   onKeyChange: (key: string) => void;
+  onProviderChange: (provider: AIProvider) => void;
 }
 
-export default function ApiKeyInput({ onKeyChange }: ApiKeyInputProps) {
+const PROVIDERS = [
+  {
+    id: "groq" as AIProvider,
+    name: "Groq",
+    label: "Free",
+    labelColor: "bg-green-900/50 text-green-400",
+    placeholder: "gsk_...",
+    helpUrl: "https://console.groq.com/keys",
+    helpText: "Free, no credit card needed",
+  },
+  {
+    id: "claude" as AIProvider,
+    name: "Claude",
+    label: "Paid",
+    labelColor: "bg-yellow-900/50 text-yellow-400",
+    placeholder: "sk-ant-...",
+    helpUrl: "https://console.anthropic.com/settings/keys",
+    helpText: "Requires Anthropic credits",
+  },
+];
+
+export default function ApiKeyInput({
+  onKeyChange,
+  onProviderChange,
+}: ApiKeyInputProps) {
+  const [provider, setProvider] = useState<AIProvider>("groq");
   const [apiKey, setApiKey] = useState("");
   const [isVisible, setIsVisible] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
 
   useEffect(() => {
-    const savedKey = localStorage.getItem("anthropic-api-key");
+    const savedProvider =
+      (localStorage.getItem("ai-provider") as AIProvider) || "groq";
+    const savedKey = localStorage.getItem(`api-key-${savedProvider}`) || "";
+    setProvider(savedProvider);
+    onProviderChange(savedProvider);
     if (savedKey) {
       setApiKey(savedKey);
       onKeyChange(savedKey);
@@ -20,26 +52,40 @@ export default function ApiKeyInput({ onKeyChange }: ApiKeyInputProps) {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const switchProvider = (newProvider: AIProvider) => {
+    setProvider(newProvider);
+    localStorage.setItem("ai-provider", newProvider);
+    onProviderChange(newProvider);
+
+    const savedKey = localStorage.getItem(`api-key-${newProvider}`) || "";
+    setApiKey(savedKey);
+    onKeyChange(savedKey);
+    setIsSaved(!!savedKey);
+  };
+
   const handleSave = () => {
     if (apiKey.trim()) {
-      localStorage.setItem("anthropic-api-key", apiKey.trim());
+      localStorage.setItem(`api-key-${provider}`, apiKey.trim());
+      localStorage.setItem("ai-provider", provider);
       onKeyChange(apiKey.trim());
       setIsSaved(true);
     }
   };
 
   const handleClear = () => {
-    localStorage.removeItem("anthropic-api-key");
+    localStorage.removeItem(`api-key-${provider}`);
     setApiKey("");
     onKeyChange("");
     setIsSaved(false);
   };
 
+  const currentProvider = PROVIDERS.find((p) => p.id === provider)!;
+
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
       <div className="flex items-center gap-2 mb-3">
         <svg
-          className="w-5 h-5 text-orange-400"
+          className="w-5 h-5 text-purple-400"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -51,18 +97,37 @@ export default function ApiKeyInput({ onKeyChange }: ApiKeyInputProps) {
             d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"
           />
         </svg>
-        <h3 className="text-sm font-semibold text-gray-300">
-          Claude API Key
-        </h3>
-        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/50 text-orange-400">
-          Anthropic
-        </span>
+        <h3 className="text-sm font-semibold text-gray-300">AI Provider</h3>
         {isSaved && (
           <span className="text-xs bg-green-900/50 text-green-400 px-2 py-0.5 rounded-full">
             Saved
           </span>
         )}
       </div>
+
+      {/* Provider tabs */}
+      <div className="flex gap-2 mb-3">
+        {PROVIDERS.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => switchProvider(p.id)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              provider === p.id
+                ? "bg-purple-600/20 border border-purple-500/40 text-purple-300"
+                : "bg-gray-800 border border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-600"
+            }`}
+          >
+            {p.name}
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded-full ${p.labelColor}`}
+            >
+              {p.label}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* Key input */}
       <div className="flex gap-2">
         <div className="relative flex-1">
           <input
@@ -72,7 +137,7 @@ export default function ApiKeyInput({ onKeyChange }: ApiKeyInputProps) {
               setApiKey(e.target.value);
               setIsSaved(false);
             }}
-            placeholder="sk-ant-..."
+            placeholder={currentProvider.placeholder}
             className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent pr-10"
           />
           <button
@@ -110,14 +175,14 @@ export default function ApiKeyInput({ onKeyChange }: ApiKeyInputProps) {
         )}
       </div>
       <p className="mt-2 text-xs text-gray-500">
-        Get your key from{" "}
+        {currentProvider.helpText} &mdash;{" "}
         <a
-          href="https://console.anthropic.com/settings/keys"
+          href={currentProvider.helpUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="text-purple-400 hover:text-purple-300 underline"
         >
-          console.anthropic.com
+          Get API Key
         </a>
         . Stored locally in your browser only.
       </p>
