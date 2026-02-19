@@ -1,161 +1,130 @@
-# VideoForge — Video Color, Text & Image Editor
+# VideoForge — AI-Powered Video Editor
 
-A web-based tool that lets you customize your competition video by adjusting colors, adding text overlays, and placing images — all from your browser.
+A web-based tool that uses AI to **detect and edit** elements in your competition video:
+
+- **Background Detection** — AI segments the foreground, lets you replace the background with any color or image
+- **Text Detection (OCR)** — Finds all text in the video, lets you edit the content, font size, and colors
+- **Image/Object Detection** — Identifies logos, graphics, and image regions, lets you replace them
+- **Color Adjustments** — Brightness, contrast, saturation, hue, RGB gamma
 
 ---
 
-## Prerequisites (install these first)
+## Prerequisites
 
-You need **two things** installed on your computer before starting:
+### Python 3.10+ (3.12 recommended)
 
-### 1. Python (version 3.10 or newer)
+| Platform | Install |
+|----------|---------|
+| **Windows** | [python.org/downloads](https://www.python.org/downloads/) — **check "Add Python to PATH"** |
+| **Mac** | `brew install python3` |
+| **Ubuntu** | `sudo apt update && sudo apt install python3 python3-pip python3-venv` |
 
-| Platform | How to install |
-|----------|---------------|
-| **Windows** | Download from [python.org/downloads](https://www.python.org/downloads/). During install, **check "Add Python to PATH"**. |
-| **Mac** | `brew install python3` (if you have Homebrew), or download from [python.org](https://www.python.org/downloads/) |
-| **Ubuntu/Debian** | `sudo apt update && sudo apt install python3 python3-pip python3-venv` |
+### FFmpeg
 
-Verify it works by opening a terminal and running:
-```
-python3 --version
-```
-
-### 2. FFmpeg
-
-| Platform | How to install |
-|----------|---------------|
-| **Windows** | `choco install ffmpeg` (if you have Chocolatey), or download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH |
+| Platform | Install |
+|----------|---------|
+| **Windows** | [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) — download "essentials", extract, add `bin` folder to PATH |
 | **Mac** | `brew install ffmpeg` |
-| **Ubuntu/Debian** | `sudo apt update && sudo apt install ffmpeg` |
-
-Verify it works:
-```
-ffmpeg -version
-```
+| **Ubuntu** | `sudo apt update && sudo apt install ffmpeg` |
 
 ---
 
-## Quick Start (3 steps)
+## Quick Start
 
-### Step 1 — Get the code
+### Option 1 — With Git
 
 ```bash
 git clone https://github.com/thilakmallakunta-collab/playable.git
 cd playable
+pip install -r requirements.txt
+python app.py
 ```
 
-### Step 2 — Run setup
+### Option 2 — Download ZIP (no Git needed)
 
-**Mac / Linux:**
-```bash
-bash setup.sh
-```
+1. Download: https://github.com/thilakmallakunta-collab/playable/archive/refs/heads/cursor/missing-task-details-ff14.zip
+2. Extract the ZIP
+3. Open a terminal in the extracted folder
+4. Run:
 
-**Windows (or manual setup on any OS):**
 ```bash
 pip install -r requirements.txt
+python app.py
 ```
 
-### Step 3 — Start the app
+Then open **http://localhost:5000** in your browser.
 
-```bash
-python3 app.py
-```
-
-You will see output like:
-```
- * Running on http://0.0.0.0:5000
-```
-
-Open your browser and go to **http://localhost:5000**
+> First run downloads AI models (~200 MB). This is automatic and only happens once.
 
 ---
 
-## How to Use the Editor
+## How to Use
 
-### Upload your video
-- Drag and drop your video onto the upload area, or click to browse
-- Supports MP4, MOV, AVI, MKV, WebM (up to 500 MB)
+### 1. Upload your video
+Drag & drop or click to browse. Supports MP4, MOV, AVI, MKV, WebM (up to 500 MB).
 
-### Colors tab (left panel)
-- **Brightness** — make the video lighter or darker
-- **Contrast** — increase or decrease the difference between light and dark
-- **Saturation** — make colors more vivid or muted
-- **Hue Rotate** — shift all colors around the color wheel
-- **RGB Gamma** — fine-tune individual red, green, blue channels
-- Changes preview instantly on the video player
+### 2. Seek to the frame you want to analyze
+Use the video player and timeline to navigate to a frame that shows the elements you want to change.
 
-### Text tab
-- Click **"Add Text Overlay"** to create a new text layer
-- Set the text content, font size, color, and position (X, Y in pixels)
-- Set **Start** and **End** times (in seconds) to control when the text appears
-- Set End to **-1** to show the text for the entire video
-- Add shadow and outline for readability
+### 3. Click "Analyze Frame"
+The AI will detect:
+- **Background** — segments foreground from background
+- **Text** — finds all text with OCR, shows bounding boxes
+- **Images** — finds logos, graphics, and image regions
 
-### Images tab
-- Click **"Add Image Overlay"** to upload a PNG/JPG image
-- Set position (X, Y), size (Width, Height), and opacity
-- Set start/end times just like text overlays
+### 4. Edit detected elements
 
-### Export
-- Click the **"Export Video"** button in the top-right
-- Wait for FFmpeg to render your video with all changes baked in
-- Click **"Download Video"** when it finishes
+**Background tab:**
+- Check "Enable Background Replacement"
+- Pick a solid color, or upload a replacement background image
 
----
+**Text tab:**
+- Each detected text shows the original content and position
+- Check the box next to a text to enable editing
+- Type your new text, set font size and colors
+- "Cover Color" fills over the original text before drawing the new one
 
-## Hosting on the Internet (optional)
+**Images tab:**
+- Each detected image region shows a thumbnail and position
+- Check the box to enable replacement
+- Upload a replacement image
 
-If you want others to access your editor over the web:
+**Colors tab:**
+- Adjust brightness, contrast, saturation, hue rotation
+- Fine-tune RGB gamma channels
+- Changes preview instantly on the video
 
-### Option A — ngrok (quickest, temporary)
-```bash
-# Install ngrok: https://ngrok.com/download
-ngrok http 5000
-```
-This gives you a public URL like `https://abc123.ngrok.io` that anyone can visit.
-
-### Option B — Deploy to a cloud server
-1. Get a server (DigitalOcean, AWS, etc.)
-2. SSH in and clone the repo
-3. Run setup and start with:
-```bash
-bash setup.sh
-source venv/bin/activate
-python3 app.py
-```
-4. Open port 5000 in your firewall
-
-### Option C — Deploy with Docker
-```dockerfile
-FROM python:3.12-slim
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-EXPOSE 5000
-CMD ["python", "app.py"]
-```
-```bash
-docker build -t videoforge .
-docker run -p 5000:5000 videoforge
-```
+### 5. Export
+Click **"Export Video"** to render the final video with all changes.
+- Text and image edits use fast FFmpeg processing
+- Background replacement processes frame-by-frame (slower, but accurate)
+- Download the result when it finishes
 
 ---
 
 ## Project Structure
 
 ```
-├── app.py                  # Flask backend + FFmpeg rendering
-├── setup.sh                # One-command setup script
+├── app.py                  # Flask backend + export logic
+├── analyzer.py             # AI detection: background, OCR, objects
 ├── requirements.txt        # Python dependencies
+├── setup.sh                # One-command setup (Mac/Linux)
 ├── templates/
 │   └── index.html          # Editor UI
 ├── static/
-│   ├── css/style.css       # Dark theme styles
+│   ├── css/style.css       # Styles
 │   └── js/app.js           # Frontend logic
-├── uploads/                # Uploaded files (auto-created, gitignored)
-└── exports/                # Rendered videos (auto-created, gitignored)
+├── uploads/                # Uploaded files (gitignored)
+└── exports/                # Rendered videos (gitignored)
 ```
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| Flask | Web server |
+| OpenCV | Frame extraction, image detection |
+| EasyOCR | Text detection in video frames |
+| rembg + onnxruntime | Background segmentation (U2Net model) |
+| Pillow | Image processing |
+| NumPy | Array operations |
