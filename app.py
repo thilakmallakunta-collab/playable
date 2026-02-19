@@ -1,4 +1,5 @@
 import os
+import sys
 import uuid
 import json
 import subprocess
@@ -13,6 +14,63 @@ from flask import Flask, render_template, request, jsonify, send_file, send_from
 from flask_cors import CORS
 
 import analyzer
+
+
+# ── Find FFmpeg ───────────────────────────────────────────────────────────
+
+def _find_ffmpeg():
+    """Locate ffmpeg binary. Checks PATH, common install locations on Windows."""
+    if shutil.which("ffmpeg"):
+        return "ffmpeg", "ffprobe"
+
+    if sys.platform == "win32":
+        common_paths = [
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "ffmpeg" / "bin",
+            Path("C:/ffmpeg/bin"),
+            Path("C:/Program Files/ffmpeg/bin"),
+            Path("C:/Program Files (x86)/ffmpeg/bin"),
+            Path(os.environ.get("USERPROFILE", "")) / "ffmpeg" / "bin",
+            Path(os.environ.get("USERPROFILE", "")) / "Downloads" / "ffmpeg" / "bin",
+        ]
+        for p in common_paths:
+            ff = p / "ffmpeg.exe"
+            if ff.exists():
+                return str(ff), str(p / "ffprobe.exe")
+
+        for drive in ["C:", "D:", "E:"]:
+            for d in Path(drive + "/").glob("ffmpeg*/bin/ffmpeg.exe"):
+                return str(d), str(d.parent / "ffprobe.exe")
+
+    return None, None
+
+
+FFMPEG, FFPROBE = _find_ffmpeg()
+
+if not FFMPEG:
+    print("\n" + "=" * 60)
+    print("  FFmpeg NOT FOUND!")
+    print("=" * 60)
+    print()
+    print("  VideoForge needs FFmpeg to export videos.")
+    print()
+    if sys.platform == "win32":
+        print("  How to install on Windows:")
+        print("  1. Go to https://www.gyan.dev/ffmpeg/builds/")
+        print("  2. Download 'ffmpeg-release-essentials.zip'")
+        print("  3. Extract to C:\\ffmpeg")
+        print("  4. Add C:\\ffmpeg\\bin to your system PATH:")
+        print("     - Press Win+S, search 'Environment Variables'")
+        print("     - Edit 'Path' under System variables")
+        print("     - Add: C:\\ffmpeg\\bin")
+        print("     - Restart this terminal")
+    else:
+        print("  sudo apt install ffmpeg   # Ubuntu/Debian")
+        print("  brew install ffmpeg       # Mac")
+    print()
+    print("  The app will start but export will not work.")
+    print("=" * 60 + "\n")
+    FFMPEG = "ffmpeg"
+    FFPROBE = "ffprobe"
 
 app = Flask(__name__)
 CORS(app)
@@ -96,6 +154,7 @@ def serve_export(fn):
 def status():
     """Report which AI features are available."""
     s = analyzer.get_status()
+    s["ffmpeg"] = shutil.which(FFMPEG) is not None or Path(FFMPEG).exists()
     return jsonify(
         features=s,
         notes={
@@ -247,12 +306,17 @@ def export_video():
     output_path = EXPORT_FOLDER / f"{export_id}.mp4"
 
     try:
+        if not (shutil.which(FFMPEG) or Path(FFMPEG).exists()):
+            return jsonify(error="FFmpeg is not installed. Install it from https://www.gyan.dev/ffmpeg/builds/ and add to PATH, then restart the app."), 500
+
         if bg_edit and bg_edit.get("enabled"):
             _export_with_bg_replace(input_path, output_path, colors,
                                     text_edits, image_edits, bg_edit)
         else:
             _export_ffmpeg(input_path, output_path, colors,
                            text_edits, image_edits)
+    except FileNotFoundError:
+        return jsonify(error="FFmpeg not found. Install it from https://www.gyan.dev/ffmpeg/builds/ — download 'ffmpeg-release-essentials.zip', extract to C:\\ffmpeg, and add C:\\ffmpeg\\bin to your system PATH. Then restart this app."), 500
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -282,12 +346,12 @@ def _export_ffmpeg(input_path, output_path, colors, text_edits, image_edits):
     has_vf = bool(color_filters) or bool(text_filters)
 
     if not has_overlays and not has_vf:
-        cmd = ["ffmpeg", "-y"] + input_args + [
+        cmd = [FFMPEG, "-y"] + input_args + [
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", str(output_path)]
     elif not has_overlays:
         vf = ",".join(color_filters + text_filters)
-        cmd = ["ffmpeg", "-y"] + input_args + [
+        cmd = [FFMPEG, "-y"] + input_args + [
             "-vf", vf,
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", str(output_path)]
@@ -317,7 +381,7 @@ def _export_ffmpeg(input_path, output_path, colors, text_edits, image_edits):
         else:
             ml = f"[{last}]"
 
-        cmd = ["ffmpeg", "-y"] + input_args + [
+        cmd = [FFMPEG, "-y"] + input_args + [
             "-filter_complex", ";".join(segs),
             "-map", ml, "-map", "0:a?",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
@@ -385,7 +449,7 @@ def _export_with_bg_replace(input_path, output_path, colors, text_edits,
         vf_str = ",".join(vf_parts) if vf_parts else "null"
 
         cmd = [
-            "ffmpeg", "-y",
+            FFMPEG, "-y",
             "-framerate", str(fps),
             "-i", str(tmpdir / "%06d.png"),
             "-i", str(input_path),
@@ -506,7 +570,7 @@ def _pick_font_file(style: str, family: str) -> str:
 
 def _probe(filepath: Path) -> dict:
     try:
-        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json",
+        cmd = [FFPROBE, "-v", "quiet", "-print_format", "json",
                "-show_format", "-show_streams", str(filepath)]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         info = json.loads(r.stdout)
@@ -524,7 +588,7 @@ def _probe(filepath: Path) -> dict:
 
 def _get_fps(filepath: Path) -> float:
     try:
-        cmd = ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+        cmd = [FFPROBE, "-v", "quiet", "-select_streams", "v:0",
                "-show_entries", "stream=r_frame_rate",
                "-of", "csv=p=0", str(filepath)]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
