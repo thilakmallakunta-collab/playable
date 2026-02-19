@@ -3,6 +3,9 @@ const App = {
     videoProbe: null,
     isPlaying: false,
 
+    features: { easyocr: false, rembg: false, opencv: true },
+    featureNotes: {},
+
     detectedTexts: [],
     detectedImages: [],
     backgroundData: null,
@@ -19,6 +22,18 @@ const App = {
     init() {
         this.cacheDOM();
         this.bindEvents();
+        this.checkStatus();
+    },
+
+    async checkStatus() {
+        try {
+            const res = await fetch("/status");
+            const d = await res.json();
+            this.features = d.features;
+            this.featureNotes = d.notes;
+        } catch (e) {
+            console.warn("Could not fetch status:", e);
+        }
     },
 
     cacheDOM() {
@@ -263,10 +278,13 @@ const App = {
     // ── Background panel ──────────────────────────────────────────────
     renderBackgroundPanel() {
         const c = document.getElementById("bg-panel-content");
+        const engine = this.features.rembg ? "AI (U2Net)" : "OpenCV GrabCut";
+        const engineClass = this.features.rembg ? "badge-ai" : "badge-fallback";
 
         let analyzeHtml = `
             <div class="analyze-prompt">
                 <p class="section-info">Seek to the frame you want, then click the button below to detect the background.</p>
+                <div class="engine-badge ${engineClass}">Engine: ${engine}</div>
                 <button id="analyze-bg-btn" class="btn btn-analyze btn-full" onclick="App.analyzeBackground()">
                     Detect Background
                 </button>
@@ -342,10 +360,15 @@ const App = {
     // ── Text panel ────────────────────────────────────────────────────
     renderTextPanel() {
         const c = document.getElementById("text-panel-content");
+        const hasOcr = this.features.easyocr;
+        const engine = hasOcr ? "EasyOCR (reads text)" : "OpenCV MSER (finds regions)";
+        const engineClass = hasOcr ? "badge-ai" : "badge-fallback";
 
         let analyzeHtml = `
             <div class="analyze-prompt">
                 <p class="section-info">Seek to a frame with text, then click the button to detect it.</p>
+                <div class="engine-badge ${engineClass}">Engine: ${engine}</div>
+                ${!hasOcr ? '<p class="fallback-note">Text regions will be found but content cannot be read. Install <code>easyocr</code> for full OCR.</p>' : ''}
                 <button id="analyze-text-btn" class="btn btn-analyze btn-full" onclick="App.analyzeText()">
                     Detect Text
                 </button>
@@ -425,6 +448,7 @@ const App = {
         let analyzeHtml = `
             <div class="analyze-prompt">
                 <p class="section-info">Seek to a frame with images/logos, then click the button to detect them.</p>
+                <div class="engine-badge badge-ai">Engine: OpenCV (contour detection)</div>
                 <button id="analyze-img-btn" class="btn btn-analyze btn-full" onclick="App.analyzeImages()">
                     Detect Images
                 </button>

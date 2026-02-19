@@ -90,6 +90,22 @@ def serve_export(fn):
     return send_from_directory(EXPORT_FOLDER, fn)
 
 
+# ── Status / health check ─────────────────────────────────────────────────
+
+@app.route("/status")
+def status():
+    """Report which AI features are available."""
+    s = analyzer.get_status()
+    return jsonify(
+        features=s,
+        notes={
+            "easyocr": "Full OCR: reads text content" if s["easyocr"] else "Fallback: finds text regions but cannot read content. Install easyocr for full OCR.",
+            "rembg": "AI segmentation (U2Net)" if s["rembg"] else "Fallback: GrabCut (OpenCV). Install rembg + onnxruntime for better results.",
+            "opencv": "Image/object detection (always available)",
+        },
+    )
+
+
 # ── Analyze endpoints ─────────────────────────────────────────────────────
 
 @app.route("/analyze/frame", methods=["POST"])
