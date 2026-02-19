@@ -14,6 +14,12 @@
 <header class="app-header">
     <h1>VideoForge</h1>
     <div class="header-actions">
+        <button id="analyze-all-btn" class="btn btn-analyze" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            Analyze Frame
+        </button>
         <button id="export-btn" class="btn btn-primary" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
@@ -76,21 +82,21 @@
             <!-- Background Section -->
             <div id="section-background" class="panel-section active">
                 <div id="bg-panel-content">
-                    <p class="empty-msg">Upload a video, then click <strong>"Analyze Frame"</strong> to detect the background, text, and images in the current frame.</p>
+                    <p class="empty-msg">Upload a video to get started.</p>
                 </div>
             </div>
 
             <!-- Text Section -->
             <div id="section-text" class="panel-section">
                 <div id="text-panel-content">
-                    <p class="empty-msg">Click <strong>"Analyze Frame"</strong> to detect text in the video.</p>
+                    <p class="empty-msg">Upload a video to get started.</p>
                 </div>
             </div>
 
             <!-- Images Section -->
             <div id="section-images" class="panel-section">
                 <div id="image-panel-content">
-                    <p class="empty-msg">Click <strong>"Analyze Frame"</strong> to detect images and objects in the video.</p>
+                    <p class="empty-msg">Upload a video to get started.</p>
                 </div>
             </div>
 

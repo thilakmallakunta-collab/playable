@@ -83,6 +83,7 @@ const App = {
             t.addEventListener("click", () => this.switchTab(t.dataset.tab)));
 
         this.exportBtn.addEventListener("click", () => this.exportVideo());
+        document.getElementById("analyze-all-btn").addEventListener("click", () => this.analyzeAll());
         this.bindColorControls();
     },
 
@@ -101,7 +102,11 @@ const App = {
             this.uploadScreen.style.display = "none";
             this.editorScreen.classList.add("active");
             this.exportBtn.disabled = false;
-            this.toast("Video loaded!", "success");
+            document.getElementById("analyze-all-btn").disabled = false;
+            this.renderBgPanel();
+            this.renderTextPanel();
+            this.renderImagePanel();
+            this.toast("Video loaded! Click 'Analyze Frame' to detect elements.", "success");
         } catch (e) { this.toast("Upload failed: " + e.message, "error"); }
     },
 
@@ -169,6 +174,120 @@ const App = {
             `brightness(${1 + b/100})`, `contrast(${1 + c/100})`,
             `saturate(${1 + s/100})`, `hue-rotate(${h}deg)`,
         ].join(" ");
+    },
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ANALYZE ALL (sequential)
+    // ═══════════════════════════════════════════════════════════════════
+
+    async analyzeAll() {
+        const btn = document.getElementById("analyze-all-btn");
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Analyzing...';
+
+        try {
+            btn.innerHTML = '<span class="spinner"></span> 1/3 Background...';
+            await this._analyzeBackgroundSilent();
+
+            btn.innerHTML = '<span class="spinner"></span> 2/3 Text...';
+            await this._analyzeTextSilent();
+
+            btn.innerHTML = '<span class="spinner"></span> 3/3 Images...';
+            await this._analyzeImagesSilent();
+
+            this.toast("Analysis complete! Check each tab for results.", "success");
+        } catch (e) {
+            this.toast("Analysis error: " + e.message, "error");
+        }
+
+        btn.disabled = false;
+        btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Analyze Frame`;
+    },
+
+    async _analyzeBackgroundSilent() {
+        const ts = this.videoEl.currentTime || 0;
+        const numLayers = parseInt(document.getElementById("num-layers-select")?.value || "4");
+        const res = await fetch("/analyze/background", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts, numLayers }),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error);
+        this.bgLayers = d;
+        this.bgLayerEdits = d.layers.map(l => ({
+            index: l.index, name: l.name, enabled: false,
+            color: "#000000", imageFilename: null, imageUrl: null,
+        }));
+        this.renderBgPanel();
+    },
+
+    async _analyzeTextSilent() {
+        const ts = this.videoEl.currentTime || 0;
+        const res = await fetch("/analyze/text", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts }),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error);
+        this.detectedTexts = d.texts || [];
+        this.textEdits = this.detectedTexts.map(t => ({
+            originalText: t.text, newText: "",
+            x: t.x, y: t.y, width: t.width, height: t.height,
+            fontSize: Math.max(12, Math.round(t.height * 0.7)),
+            fontColor: "white", fillColor: "black", enabled: false,
+        }));
+        this.renderTextPanel();
+    },
+
+    async _analyzeImagesSilent() {
+        const ts = this.videoEl.currentTime || 0;
+        const res = await fetch("/analyze/images", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts }),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error);
+        this.detectedImages = d.images || [];
+        this.imageEdits = this.detectedImages.map(im => ({
+            x: im.x, y: im.y, width: im.width, height: im.height,
+            label: im.label || "region", confidence: im.confidence || 0,
+            source: im.source || "opencv", thumbnail: im.thumbnail,
+            replacementFilename: null, replacementUrl: null, enabled: false,
+        }));
+        this.renderImagePanel();
+    },
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ANALYZE ALL (runs background, text, images one after another)
+    // ═══════════════════════════════════════════════════════════════════
+
+    async analyzeAll() {
+        const btn = document.getElementById("analyze-all-btn");
+        if (!btn || !this.videoFilename) return;
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Analyzing...';
+
+        try {
+            this.toast("Step 1/3: Detecting background layers...", "info");
+            await this.analyzeBackground();
+
+            this.toast("Step 2/3: Detecting text...", "info");
+            await this.analyzeText();
+
+            this.toast("Step 3/3: Detecting images & objects...", "info");
+            await this.analyzeImages();
+
+            this.toast("Analysis complete!", "success");
+        } catch (e) {
+            this.toast("Analysis error: " + e.message, "error");
+        }
+
+        btn.disabled = false;
+        btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Analyze Frame`;
     },
 
     // ═══════════════════════════════════════════════════════════════════
