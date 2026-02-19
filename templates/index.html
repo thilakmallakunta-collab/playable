@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Editor — Colors, Text &amp; Images</title>
+    <title>VideoForge — AI Video Editor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -14,11 +14,16 @@
 <header class="app-header">
     <h1>VideoForge</h1>
     <div class="header-actions">
+        <button id="analyze-btn" class="btn btn-analyze" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            Analyze Frame
+        </button>
         <button id="export-btn" class="btn btn-primary" disabled>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                <polyline points="7 10 12 15 17 10"/>
-                <line x1="12" y1="15" x2="12" y2="3"/>
+                <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
             Export Video
         </button>
@@ -31,13 +36,12 @@
         <div class="upload-icon">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
+                <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
         </div>
         <h2>Upload Your Competition Video</h2>
-        <p>Drag &amp; drop your video file here, or click to browse</p>
-        <p class="formats">Supported: MP4, MOV, AVI, MKV, WebM &bull; Max 500 MB</p>
+        <p>Drag &amp; drop your video file, or click to browse</p>
+        <p class="formats">MP4, MOV, AVI, MKV, WebM &bull; Up to 500 MB</p>
     </div>
     <input type="file" id="file-input" accept="video/*" hidden>
 </div>
@@ -45,7 +49,7 @@
 <!-- Editor -->
 <div id="editor" class="editor">
 
-    <!-- Preview Area -->
+    <!-- Preview -->
     <div class="preview-area">
         <div class="preview-container">
             <div class="video-wrapper">
@@ -67,35 +71,55 @@
     <!-- Side Panel -->
     <div class="side-panel">
         <div class="panel-tabs">
-            <button class="panel-tab active" data-tab="colors">Colors</button>
+            <button class="panel-tab active" data-tab="background">Background</button>
             <button class="panel-tab" data-tab="text">Text</button>
             <button class="panel-tab" data-tab="images">Images</button>
+            <button class="panel-tab" data-tab="colors">Colors</button>
         </div>
 
-        <div id="panel-content" class="panel-content">
+        <div class="panel-content">
+
+            <!-- Background Section -->
+            <div id="section-background" class="panel-section active">
+                <div id="bg-panel-content">
+                    <p class="empty-msg">Upload a video, then click <strong>"Analyze Frame"</strong> to detect the background, text, and images in the current frame.</p>
+                </div>
+            </div>
+
+            <!-- Text Section -->
+            <div id="section-text" class="panel-section">
+                <div id="text-panel-content">
+                    <p class="empty-msg">Click <strong>"Analyze Frame"</strong> to detect text in the video.</p>
+                </div>
+            </div>
+
+            <!-- Images Section -->
+            <div id="section-images" class="panel-section">
+                <div id="image-panel-content">
+                    <p class="empty-msg">Click <strong>"Analyze Frame"</strong> to detect images and objects in the video.</p>
+                </div>
+            </div>
 
             <!-- Colors Section -->
-            <div id="section-colors" class="panel-section active">
+            <div id="section-colors" class="panel-section">
                 <div class="control-group">
                     <label>Brightness <span>0</span></label>
-                    <input id="color-brightness" type="range" class="slider-input" min="-100" max="100" value="0" step="1">
+                    <input id="color-brightness" type="range" class="slider-input" min="-100" max="100" value="0">
                 </div>
                 <div class="control-group">
                     <label>Contrast <span>0</span></label>
-                    <input id="color-contrast" type="range" class="slider-input" min="-100" max="100" value="0" step="1">
+                    <input id="color-contrast" type="range" class="slider-input" min="-100" max="100" value="0">
                 </div>
                 <div class="control-group">
                     <label>Saturation <span>0</span></label>
-                    <input id="color-saturation" type="range" class="slider-input" min="-100" max="100" value="0" step="1">
+                    <input id="color-saturation" type="range" class="slider-input" min="-100" max="100" value="0">
                 </div>
                 <div class="control-group">
-                    <label>Hue Rotate <span>0°</span></label>
-                    <input id="color-hueRotate" type="range" class="slider-input" min="0" max="360" value="0" step="1">
+                    <label>Hue Rotate <span>0&deg;</span></label>
+                    <input id="color-hueRotate" type="range" class="slider-input" min="0" max="360" value="0">
                 </div>
-
                 <div class="divider"></div>
-                <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600">Channel Gamma</p>
-
+                <p class="section-label">Channel Gamma</p>
                 <div class="control-group">
                     <label>Red <span>1.00</span></label>
                     <input id="color-gammaR" type="range" class="slider-input" min="0.1" max="3" value="1" step="0.05">
@@ -108,37 +132,8 @@
                     <label>Blue <span>1.00</span></label>
                     <input id="color-gammaB" type="range" class="slider-input" min="0.1" max="3" value="1" step="0.05">
                 </div>
-
-                <div style="text-align:center;margin-top:16px">
+                <div style="text-align:center;margin-top:14px">
                     <button id="reset-colors" class="reset-link">Reset all to defaults</button>
-                </div>
-            </div>
-
-            <!-- Text Section -->
-            <div id="section-text" class="panel-section">
-                <div id="text-list"></div>
-                <div class="add-btn-area">
-                    <button class="btn btn-secondary" onclick="App.addText()">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="12" y1="5" x2="12" y2="19"/>
-                            <line x1="5" y1="12" x2="19" y2="12"/>
-                        </svg>
-                        Add Text Overlay
-                    </button>
-                </div>
-            </div>
-
-            <!-- Images Section -->
-            <div id="section-images" class="panel-section">
-                <div id="image-list"></div>
-                <div class="add-btn-area">
-                    <button class="btn btn-secondary" onclick="App.addImage()">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="12" y1="5" x2="12" y2="19"/>
-                            <line x1="5" y1="12" x2="19" y2="12"/>
-                        </svg>
-                        Add Image Overlay
-                    </button>
                 </div>
             </div>
         </div>
@@ -157,7 +152,6 @@
     </div>
 </div>
 
-<!-- Toast Container -->
 <div class="toast-container"></div>
 
 <script src="/static/js/app.js"></script>

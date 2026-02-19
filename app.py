@@ -2,12 +2,17 @@ import os
 import uuid
 import json
 import subprocess
-import shlex
+import tempfile
+import shutil
 from pathlib import Path
 
+import cv2
+import numpy as np
+from PIL import Image
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
+
+import analyzer
 
 app = Flask(__name__)
 CORS(app)
@@ -17,271 +22,410 @@ EXPORT_FOLDER = Path(__file__).parent / "exports"
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 EXPORT_FOLDER.mkdir(exist_ok=True)
 
-app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500 MB
+app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
 
 ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
-ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+ALLOWED_IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 
-def _allowed_video(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_VIDEO_EXT
+def _allowed_video(fn: str) -> bool:
+    return Path(fn).suffix.lower() in ALLOWED_VIDEO_EXT
 
 
-def _allowed_image(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_IMAGE_EXT
+def _allowed_image(fn: str) -> bool:
+    return Path(fn).suffix.lower() in ALLOWED_IMAGE_EXT
 
+
+# ── Pages ─────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
 
+# ── File upload / serve ───────────────────────────────────────────────────
+
 @app.route("/upload/video", methods=["POST"])
 def upload_video():
     if "video" not in request.files:
-        return jsonify(error="No video file provided"), 400
+        return jsonify(error="No video file"), 400
+    f = request.files["video"]
+    if not f.filename or not _allowed_video(f.filename):
+        return jsonify(error="Invalid format. Use mp4, mov, avi, mkv, or webm."), 400
 
-    file = request.files["video"]
-    if not file.filename or not _allowed_video(file.filename):
-        return jsonify(error="Invalid video format. Use mp4, mov, avi, mkv, or webm."), 400
+    vid_id = uuid.uuid4().hex[:8]
+    ext = Path(f.filename).suffix.lower()
+    fname = f"{vid_id}{ext}"
+    path = UPLOAD_FOLDER / fname
+    f.save(path)
 
-    video_id = str(uuid.uuid4())[:8]
-    ext = Path(file.filename).suffix.lower()
-    filename = f"{video_id}{ext}"
-    filepath = UPLOAD_FOLDER / filename
-    file.save(filepath)
-
-    probe = _probe_video(filepath)
-
-    return jsonify(
-        id=video_id,
-        filename=filename,
-        url=f"/files/uploads/{filename}",
-        probe=probe,
-    )
+    return jsonify(id=vid_id, filename=fname,
+                   url=f"/files/uploads/{fname}",
+                   probe=_probe(path))
 
 
 @app.route("/upload/image", methods=["POST"])
 def upload_image():
     if "image" not in request.files:
-        return jsonify(error="No image file provided"), 400
-
-    file = request.files["image"]
-    if not file.filename or not _allowed_image(file.filename):
+        return jsonify(error="No image file"), 400
+    f = request.files["image"]
+    if not f.filename or not _allowed_image(f.filename):
         return jsonify(error="Invalid image format."), 400
 
-    img_id = str(uuid.uuid4())[:8]
-    ext = Path(file.filename).suffix.lower()
-    filename = f"{img_id}{ext}"
-    filepath = UPLOAD_FOLDER / filename
-    file.save(filepath)
+    img_id = uuid.uuid4().hex[:8]
+    ext = Path(f.filename).suffix.lower()
+    fname = f"{img_id}{ext}"
+    path = UPLOAD_FOLDER / fname
+    f.save(path)
+    return jsonify(id=img_id, filename=fname, url=f"/files/uploads/{fname}")
 
+
+@app.route("/files/uploads/<path:fn>")
+def serve_upload(fn):
+    return send_from_directory(UPLOAD_FOLDER, fn)
+
+
+@app.route("/files/exports/<path:fn>")
+def serve_export(fn):
+    return send_from_directory(EXPORT_FOLDER, fn)
+
+
+# ── Analyze endpoints ─────────────────────────────────────────────────────
+
+@app.route("/analyze/frame", methods=["POST"])
+def analyze_frame():
+    """Return the frame image at a given timestamp as a data-URI."""
+    data = request.get_json()
+    fname = data.get("videoFilename")
+    ts = float(data.get("timestamp", 0))
+
+    path = UPLOAD_FOLDER / fname
+    if not path.exists():
+        return jsonify(error="Video not found"), 404
+
+    frame = analyzer.extract_frame(path, ts)
     return jsonify(
-        id=img_id,
-        filename=filename,
-        url=f"/files/uploads/{filename}",
+        frame=analyzer.frame_to_data_uri(frame),
+        width=frame.width,
+        height=frame.height,
     )
 
 
-@app.route("/files/uploads/<path:filename>")
-def serve_upload(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
+@app.route("/analyze/background", methods=["POST"])
+def analyze_background():
+    """Segment the background from the foreground."""
+    data = request.get_json()
+    fname = data.get("videoFilename")
+    ts = float(data.get("timestamp", 0))
+
+    path = UPLOAD_FOLDER / fname
+    if not path.exists():
+        return jsonify(error="Video not found"), 404
+
+    frame = analyzer.extract_frame(path, ts)
+    result = analyzer.detect_background(frame)
+    return jsonify(result)
 
 
-@app.route("/files/exports/<path:filename>")
-def serve_export(filename):
-    return send_from_directory(EXPORT_FOLDER, filename)
+@app.route("/analyze/text", methods=["POST"])
+def analyze_text():
+    """Run OCR on the frame."""
+    data = request.get_json()
+    fname = data.get("videoFilename")
+    ts = float(data.get("timestamp", 0))
 
+    path = UPLOAD_FOLDER / fname
+    if not path.exists():
+        return jsonify(error="Video not found"), 404
+
+    frame = analyzer.extract_frame(path, ts)
+    regions = analyzer.detect_text(frame)
+    return jsonify(
+        texts=regions,
+        frame=analyzer.frame_to_data_uri(frame),
+        width=frame.width,
+        height=frame.height,
+    )
+
+
+@app.route("/analyze/images", methods=["POST"])
+def analyze_images():
+    """Detect image / object regions."""
+    data = request.get_json()
+    fname = data.get("videoFilename")
+    ts = float(data.get("timestamp", 0))
+
+    path = UPLOAD_FOLDER / fname
+    if not path.exists():
+        return jsonify(error="Video not found"), 404
+
+    frame = analyzer.extract_frame(path, ts)
+    regions = analyzer.detect_images(frame)
+    return jsonify(
+        images=regions,
+        frame=analyzer.frame_to_data_uri(frame),
+        width=frame.width,
+        height=frame.height,
+    )
+
+
+# ── Export ─────────────────────────────────────────────────────────────────
 
 @app.route("/export", methods=["POST"])
 def export_video():
-    data = request.get_json()
-    if not data:
-        return jsonify(error="No data provided"), 400
-
-    video_filename = data.get("videoFilename")
-    if not video_filename:
+    data = request.get_json() or {}
+    fname = data.get("videoFilename")
+    if not fname:
         return jsonify(error="No video filename"), 400
 
-    input_path = UPLOAD_FOLDER / video_filename
+    input_path = UPLOAD_FOLDER / fname
     if not input_path.exists():
         return jsonify(error="Video not found"), 404
 
     colors = data.get("colors", {})
-    texts = data.get("texts", [])
-    images = data.get("images", [])
+    text_edits = data.get("textEdits", [])
+    image_edits = data.get("imageEdits", [])
+    bg_edit = data.get("backgroundEdit")
 
-    export_id = str(uuid.uuid4())[:8]
+    export_id = uuid.uuid4().hex[:8]
     output_path = EXPORT_FOLDER / f"{export_id}.mp4"
 
     try:
-        _render_video(input_path, output_path, colors, texts, images)
+        if bg_edit and bg_edit.get("enabled"):
+            _export_with_bg_replace(input_path, output_path, colors,
+                                    text_edits, image_edits, bg_edit)
+        else:
+            _export_ffmpeg(input_path, output_path, colors,
+                           text_edits, image_edits)
     except Exception as e:
-        return jsonify(error=f"Export failed: {str(e)}"), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify(error=f"Export failed: {e}"), 500
 
-    return jsonify(
-        url=f"/files/exports/{export_id}.mp4",
-        filename=f"{export_id}.mp4",
-    )
-
-
-@app.route("/download/<path:filename>")
-def download_export(filename):
-    return send_file(EXPORT_FOLDER / filename, as_attachment=True)
+    return jsonify(url=f"/files/exports/{export_id}.mp4",
+                   filename=f"{export_id}.mp4")
 
 
-def _probe_video(filepath: Path) -> dict:
-    try:
-        cmd = [
-            "ffprobe", "-v", "quiet",
-            "-print_format", "json",
-            "-show_format", "-show_streams",
-            str(filepath),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        info = json.loads(result.stdout)
+# ── FFmpeg-based export (fast path, no bg replace) ────────────────────────
 
-        video_stream = next(
-            (s for s in info.get("streams", []) if s.get("codec_type") == "video"),
-            {},
-        )
-        return {
-            "width": int(video_stream.get("width", 0)),
-            "height": int(video_stream.get("height", 0)),
-            "duration": float(info.get("format", {}).get("duration", 0)),
-            "codec": video_stream.get("codec_name", "unknown"),
-        }
-    except Exception:
-        return {}
+def _export_ffmpeg(input_path, output_path, colors, text_edits, image_edits):
+    color_filters = _build_color_filters(colors)
+    text_filters = _build_text_filters(text_edits)
 
-
-def _render_video(
-    input_path: Path,
-    output_path: Path,
-    colors: dict,
-    texts: list,
-    images: list,
-):
-    color_filters = []
-
-    brightness = colors.get("brightness", 0)
-    contrast = colors.get("contrast", 0)
-    saturation = colors.get("saturation", 0)
-    hue_rotate = colors.get("hueRotate", 0)
-    gamma_r = colors.get("gammaR", 1.0)
-    gamma_g = colors.get("gammaG", 1.0)
-    gamma_b = colors.get("gammaB", 1.0)
-
-    eq_parts = []
-    if brightness != 0:
-        eq_parts.append(f"brightness={brightness / 100:.2f}")
-    if contrast != 0:
-        eq_parts.append(f"contrast={1 + contrast / 100:.2f}")
-    if saturation != 0:
-        eq_parts.append(f"saturation={1 + saturation / 100:.2f}")
-    if gamma_r != 1.0 or gamma_g != 1.0 or gamma_b != 1.0:
-        eq_parts.extend([f"gamma_r={gamma_r:.2f}", f"gamma_g={gamma_g:.2f}", f"gamma_b={gamma_b:.2f}"])
-
-    if eq_parts:
-        color_filters.append(f"eq={':'.join(eq_parts)}")
-    if hue_rotate != 0:
-        color_filters.append(f"hue=h={hue_rotate}")
-
-    text_filters = []
-    for txt in texts:
-        content = txt.get("text", "").replace("'", "'\\''").replace(":", "\\:")
-        if not content.strip():
-            continue
-        enable_expr = (
-            f"between(t\\,{txt.get('startTime', 0)}\\,{txt.get('endTime', -1)})"
-            if txt.get("endTime", -1) > 0
-            else f"gte(t\\,{txt.get('startTime', 0)})"
-        )
-        dt = (
-            f"drawtext=text='{content}':"
-            f"fontsize={txt.get('fontSize', 48)}:"
-            f"fontcolor={txt.get('color', 'white')}:"
-            f"x={txt.get('x', 10)}:y={txt.get('y', 10)}:"
-            f"shadowcolor={txt.get('shadowColor', 'black')}:"
-            f"shadowx={txt.get('shadowX', 2)}:shadowy={txt.get('shadowY', 2)}:"
-            f"borderw={txt.get('borderW', 0)}:bordercolor={txt.get('borderColor', 'black')}:"
-            f"enable='{enable_expr}'"
-        )
-        text_filters.append(dt)
-
-    valid_images = []
-    for img in images:
-        img_path = UPLOAD_FOLDER / img["filename"]
-        if img_path.exists():
-            valid_images.append(img)
+    valid_imgs = []
+    for ie in image_edits:
+        rp = ie.get("replacementFilename")
+        if rp and (UPLOAD_FOLDER / rp).exists():
+            valid_imgs.append(ie)
 
     input_args = ["-i", str(input_path)]
-    for img in valid_images:
-        input_args.extend(["-i", str(UPLOAD_FOLDER / img["filename"])])
+    for ie in valid_imgs:
+        input_args.extend(["-i", str(UPLOAD_FOLDER / ie["replacementFilename"])])
 
-    has_overlays = bool(valid_images)
-    has_simple_filters = bool(color_filters) or bool(text_filters)
+    has_overlays = bool(valid_imgs)
+    has_vf = bool(color_filters) or bool(text_filters)
 
-    if not has_overlays and not has_simple_filters:
+    if not has_overlays and not has_vf:
         cmd = ["ffmpeg", "-y"] + input_args + [
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", str(output_path),
-        ]
+            "-c:a", "aac", str(output_path)]
     elif not has_overlays:
         vf = ",".join(color_filters + text_filters)
         cmd = ["ffmpeg", "-y"] + input_args + [
             "-vf", vf,
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", str(output_path),
-        ]
+            "-c:a", "aac", str(output_path)]
     else:
-        segments = []
+        segs = []
+        base = "[0:v]" + ",".join(color_filters) + "[base]" if color_filters else "[0:v]null[base]"
+        segs.append(base)
 
-        base_chain = "[0:v]" + ",".join(color_filters) + "[base]" if color_filters else "[0:v]null[base]"
-        segments.append(base_chain)
+        for idx, ie in enumerate(valid_imgs):
+            inp = idx + 1
+            ox, oy = ie.get("x", 0), ie.get("y", 0)
+            ow, oh = ie.get("width", 200), ie.get("height", 200)
 
-        for idx, img in enumerate(valid_images):
-            input_idx = idx + 1
-            w = img.get("width", 200)
-            h = img.get("height", 200)
-            opacity = img.get("opacity", 1.0)
-            segments.append(
-                f"[{input_idx}:v]scale={w}:{h},format=rgba,"
-                f"colorchannelmixer=aa={opacity}[img{idx}]"
+            cover = (
+                f"[{inp}:v]scale={ow}:{oh}[ov{idx}]"
             )
+            segs.append(cover)
 
-            enable_expr = (
-                f"between(t\\,{img.get('startTime', 0)}\\,{img.get('endTime', -1)})"
-                if img.get("endTime", -1) > 0
-                else f"gte(t\\,{img.get('startTime', 0)})"
-            )
             src = f"[v{idx}]" if idx > 0 else "[base]"
             dst = f"[v{idx + 1}]"
-            segments.append(
-                f"{src}[img{idx}]overlay={img.get('x', 0)}:{img.get('y', 0)}:"
-                f"enable='{enable_expr}'{dst}"
-            )
+            segs.append(f"{src}[ov{idx}]overlay={ox}:{oy}{dst}")
 
-        last_label = f"v{len(valid_images)}"
-
+        last = f"v{len(valid_imgs)}"
         if text_filters:
-            segments.append(f"[{last_label}]{','.join(text_filters)}[final]")
-            map_label = "[final]"
+            segs.append(f"[{last}]{','.join(text_filters)}[final]")
+            ml = "[final]"
         else:
-            map_label = f"[{last_label}]"
-
-        filter_complex = ";".join(segments)
+            ml = f"[{last}]"
 
         cmd = ["ffmpeg", "-y"] + input_args + [
-            "-filter_complex", filter_complex,
-            "-map", map_label, "-map", "0:a?",
+            "-filter_complex", ";".join(segs),
+            "-map", ml, "-map", "0:a?",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", str(output_path),
-        ]
+            "-c:a", "aac", str(output_path)]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg error: {result.stderr[-500:]}")
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr[-800:])
+
+
+# ── Frame-by-frame export (slow path, with bg replace) ───────────────────
+
+def _export_with_bg_replace(input_path, output_path, colors, text_edits,
+                            image_edits, bg_edit):
+    probe = _probe(input_path)
+    fps = _get_fps(input_path)
+    w, h = probe["width"], probe["height"]
+
+    bg_color = None
+    bg_img = None
+    if bg_edit.get("color"):
+        hex_c = bg_edit["color"].lstrip("#")
+        bg_color = tuple(int(hex_c[i:i+2], 16) for i in (0, 2, 4))
+    if bg_edit.get("imageFilename"):
+        bg_path = UPLOAD_FOLDER / bg_edit["imageFilename"]
+        if bg_path.exists():
+            bg_img = Image.open(bg_path).convert("RGB")
+
+    replacement_imgs = {}
+    for ie in image_edits:
+        rp = ie.get("replacementFilename")
+        if rp and (UPLOAD_FOLDER / rp).exists():
+            ri = Image.open(UPLOAD_FOLDER / rp).convert("RGBA")
+            ri = ri.resize((ie["width"], ie["height"]))
+            replacement_imgs[id(ie)] = (ie, ri)
+
+    tmpdir = Path(tempfile.mkdtemp())
+    try:
+        cap = cv2.VideoCapture(str(input_path))
+        frame_idx = 0
+        while True:
+            ok, bgr = cap.read()
+            if not ok:
+                break
+
+            pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+            pil = analyzer.replace_background_frame(pil, bg_color=bg_color, bg_image=bg_img)
+
+            for key, (ie, ri) in replacement_imgs.items():
+                ox, oy = ie["x"], ie["y"]
+                pil.paste(ri, (ox, oy), ri)
+
+            out_arr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+            cv2.imwrite(str(tmpdir / f"{frame_idx:06d}.png"), out_arr)
+            frame_idx += 1
+
+        cap.release()
+
+        text_vf = _build_text_filters(text_edits)
+        color_vf = _build_color_filters(colors)
+        vf_parts = color_vf + text_vf
+        vf_str = ",".join(vf_parts) if vf_parts else "null"
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-framerate", str(fps),
+            "-i", str(tmpdir / "%06d.png"),
+            "-i", str(input_path),
+            "-vf", vf_str,
+            "-map", "0:v", "-map", "1:a?",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-shortest",
+            str(output_path),
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr[-800:])
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ── Filter builders ───────────────────────────────────────────────────────
+
+def _build_color_filters(colors: dict) -> list[str]:
+    filters = []
+    eq = []
+    b = colors.get("brightness", 0)
+    c = colors.get("contrast", 0)
+    s = colors.get("saturation", 0)
+    gr = colors.get("gammaR", 1.0)
+    gg = colors.get("gammaG", 1.0)
+    gb = colors.get("gammaB", 1.0)
+    h = colors.get("hueRotate", 0)
+
+    if b:
+        eq.append(f"brightness={b / 100:.2f}")
+    if c:
+        eq.append(f"contrast={1 + c / 100:.2f}")
+    if s:
+        eq.append(f"saturation={1 + s / 100:.2f}")
+    if gr != 1.0 or gg != 1.0 or gb != 1.0:
+        eq.extend([f"gamma_r={gr:.2f}", f"gamma_g={gg:.2f}", f"gamma_b={gb:.2f}"])
+    if eq:
+        filters.append(f"eq={':'.join(eq)}")
+    if h:
+        filters.append(f"hue=h={h}")
+    return filters
+
+
+def _build_text_filters(text_edits: list) -> list[str]:
+    filters = []
+    for te in text_edits:
+        new_text = te.get("newText", "").replace("'", "'\\''").replace(":", "\\:")
+        if not new_text.strip():
+            continue
+
+        ox, oy = te.get("x", 0), te.get("y", 0)
+        ow, oh = te.get("width", 100), te.get("height", 30)
+        fill_color = te.get("fillColor", "black")
+        font_size = te.get("fontSize", 24)
+        font_color = te.get("fontColor", "white")
+
+        filters.append(
+            f"drawbox=x={ox}:y={oy}:w={ow}:h={oh}:"
+            f"color={fill_color}:t=fill"
+        )
+        filters.append(
+            f"drawtext=text='{new_text}':"
+            f"fontsize={font_size}:fontcolor={font_color}:"
+            f"x={ox + 4}:y={oy + 2}"
+        )
+    return filters
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────
+
+def _probe(filepath: Path) -> dict:
+    try:
+        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json",
+               "-show_format", "-show_streams", str(filepath)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        info = json.loads(r.stdout)
+        vs = next((s for s in info.get("streams", [])
+                    if s.get("codec_type") == "video"), {})
+        return {
+            "width": int(vs.get("width", 0)),
+            "height": int(vs.get("height", 0)),
+            "duration": float(info.get("format", {}).get("duration", 0)),
+            "codec": vs.get("codec_name", "unknown"),
+        }
+    except Exception:
+        return {}
+
+
+def _get_fps(filepath: Path) -> float:
+    try:
+        cmd = ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+               "-show_entries", "stream=r_frame_rate",
+               "-of", "csv=p=0", str(filepath)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        num, den = r.stdout.strip().split("/")
+        return round(int(num) / int(den), 2)
+    except Exception:
+        return 30.0
 
 
 if __name__ == "__main__":
