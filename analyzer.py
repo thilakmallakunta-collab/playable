@@ -21,26 +21,32 @@ log = logging.getLogger(__name__)
 
 HAS_EASYOCR = False
 HAS_REMBG = False
+HAS_YOLO = False
 
 try:
     import easyocr
     HAS_EASYOCR = True
-    log.info("easyocr available")
 except Exception as e:
     log.warning(f"easyocr not available: {e}")
 
 try:
     from rembg import remove as _rembg_remove, new_session as _rembg_new_session
     HAS_REMBG = True
-    log.info("rembg available")
 except Exception as e:
     log.warning(f"rembg not available: {e}")
+
+try:
+    from ultralytics import YOLO as _YOLO
+    HAS_YOLO = True
+except Exception as e:
+    log.warning(f"ultralytics/YOLO not available: {e}")
 
 
 def get_status() -> dict:
     return {
         "easyocr": HAS_EASYOCR,
         "rembg": HAS_REMBG,
+        "yolo": HAS_YOLO,
         "opencv": True,
     }
 
@@ -290,55 +296,279 @@ def _merge_text_boxes(bboxes, img_w, img_h):
 
 # ── Image / object detection ──────────────────────────────────────────────
 
-def detect_images(frame: Image.Image, min_area_ratio: float = 0.005) -> list[dict]:
+_yolo_model = None
+
+
+def detect_images(frame: Image.Image) -> list[dict]:
+    """
+    Detect all objects and visual regions in the frame.
+    Uses YOLO for named object detection + enhanced visual region
+    detection for logos, graphics, icons, and other non-standard elements.
+    Results from both methods are merged and de-duplicated.
+    """
+    results = []
+
+    if HAS_YOLO:
+        results.extend(_detect_yolo(frame))
+
+    results.extend(_detect_visual_regions(frame))
+
+    results = _deduplicate(results, frame.width, frame.height)
+
+    results.sort(key=lambda d: d["area"], reverse=True)
+
+    for idx, r in enumerate(results):
+        r["index"] = idx
+
+    return results
+
+
+def _detect_yolo(frame: Image.Image) -> list[dict]:
+    global _yolo_model
+    if _yolo_model is None:
+        _yolo_model = _YOLO("yolov8n.pt")
+
     arr = np.array(frame)
-    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    total_area = gray.shape[0] * gray.shape[1]
-    min_area = total_area * min_area_ratio
-    max_area = total_area * 0.85
-
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blurred, 30, 120)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=3)
-
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    preds = _yolo_model(arr, verbose=False, conf=0.25)
 
     detected = []
-    seen: list[tuple] = []
+    for result in preds:
+        for box in result.boxes:
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+            conf = float(box.conf[0])
+            cls_id = int(box.cls[0])
+            label = result.names[cls_id]
 
-    for cnt in sorted(contours, key=cv2.contourArea, reverse=True):
-        area = cv2.contourArea(cnt)
-        if area < min_area or area > max_area:
+            x, y = int(x1), int(y1)
+            w, h = int(x2 - x1), int(y2 - y1)
+
+            if w < 5 or h < 5:
+                continue
+
+            thumb = frame.crop((x, y, x + w, y + h))
+            thumb.thumbnail((120, 120))
+
+            detected.append({
+                "x": x, "y": y, "width": w, "height": h,
+                "area": w * h,
+                "label": label,
+                "confidence": round(conf, 3),
+                "source": "yolo",
+                "thumbnail": frame_to_data_uri(thumb, fmt="JPEG", quality=70),
+            })
+
+    return detected
+
+
+def _detect_visual_regions(frame: Image.Image) -> list[dict]:
+    """
+    Detect every distinct visual region (logos, icons, graphics, panels,
+    embedded images) using multiple OpenCV techniques.  Each element is
+    kept separate — only truly overlapping duplicates are merged.
+    """
+    arr = np.array(frame)
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    h, w = gray.shape
+    total_area = h * w
+    min_area = max(150, total_area * 0.0003)
+    max_area = total_area * 0.80
+
+    candidates = []
+
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+
+    # Method 1a: Canny edges with moderate closing — larger panels/boxes
+    edges = cv2.Canny(blurred, 20, 80)
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, k, iterations=2)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours:
+        a = cv2.contourArea(cnt)
+        if min_area <= a <= max_area:
+            candidates.append(cv2.boundingRect(cnt))
+
+    # Method 1b: Canny edges with light closing — smaller individual items
+    k_small = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    closed_light = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, k_small, iterations=1)
+    contours_light, _ = cv2.findContours(
+        closed_light, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours_light:
+        a = cv2.contourArea(cnt)
+        if min_area * 0.5 <= a <= max_area:
+            candidates.append(cv2.boundingRect(cnt))
+
+    # Method 1c: Canny edges — nested/child contours (elements inside panels)
+    contours_tree, hierarchy = cv2.findContours(
+        closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is not None:
+        for i, cnt in enumerate(contours_tree):
+            if hierarchy[0][i][3] != -1:
+                a = cv2.contourArea(cnt)
+                if min_area * 0.3 <= a <= max_area * 0.5:
+                    candidates.append(cv2.boundingRect(cnt))
+
+    # Method 2: Color saturation segmentation
+    hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
+    _, sat_mask = cv2.threshold(hsv[:, :, 1], 40, 255, cv2.THRESH_BINARY)
+    sat_mask = cv2.morphologyEx(sat_mask, cv2.MORPH_CLOSE, k, iterations=2)
+    contours_sat, _ = cv2.findContours(sat_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours_sat:
+        a = cv2.contourArea(cnt)
+        if min_area <= a <= max_area:
+            candidates.append(cv2.boundingRect(cnt))
+
+    # Method 3: Adaptive threshold — catches text blocks, subtle graphics
+    adaptive = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 15, 4)
+    k2 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+    adaptive = cv2.morphologyEx(adaptive, cv2.MORPH_CLOSE, k2, iterations=2)
+    contours_ad, _ = cv2.findContours(adaptive, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours_ad:
+        a = cv2.contourArea(cnt)
+        if min_area <= a <= max_area:
+            candidates.append(cv2.boundingRect(cnt))
+
+    # Method 4: MSER — stable regions (icons, small images, logos)
+    mser = cv2.MSER_create()
+    mser.setMinArea(max(80, int(min_area * 0.3)))
+    mser.setMaxArea(int(min(max_area, 80000)))
+    try:
+        regions, _ = mser.detectRegions(gray)
+        for region in regions:
+            bx, by, bw, bh = cv2.boundingRect(region)
+            if min_area * 0.3 <= bw * bh <= max_area:
+                candidates.append((bx, by, bw, bh))
+    except Exception:
+        pass
+
+    # De-duplicate: keep distinct elements, merge only true duplicates
+    deduped = _dedup_boxes(candidates, min_area, max_area)
+
+    detected = []
+    for bx, by, bw, bh in deduped:
+        if bw < 8 or bh < 8:
+            continue
+        aspect = bw / bh if bh > 0 else 0
+        if aspect < 0.08 or aspect > 12:
             continue
 
-        x, y, w, h = cv2.boundingRect(cnt)
-        aspect = w / h if h > 0 else 0
-        if aspect < 0.15 or aspect > 7:
-            continue
-
-        duplicate = False
-        for sx, sy, sw, sh in seen:
-            ox = max(0, min(x + w, sx + sw) - max(x, sx))
-            oy = max(0, min(y + h, sy + sh) - max(y, sy))
-            if ox * oy > 0.5 * min(w * h, sw * sh):
-                duplicate = True
-                break
-        if duplicate:
-            continue
-        seen.append((x, y, w, h))
-
-        thumb = frame.crop((x, y, x + w, y + h))
+        thumb = frame.crop((bx, by, bx + bw, by + bh))
         thumb.thumbnail((120, 120))
 
         detected.append({
-            "x": int(x), "y": int(y), "width": int(w), "height": int(h),
-            "area": int(area),
+            "x": int(bx), "y": int(by), "width": int(bw), "height": int(bh),
+            "area": int(bw * bh),
+            "label": "visual region",
+            "confidence": 0.0,
+            "source": "opencv",
             "thumbnail": frame_to_data_uri(thumb, fmt="JPEG", quality=70),
         })
 
-        if len(detected) >= 20:
+    return detected
+
+
+def _dedup_boxes(boxes, min_area, max_area):
+    """
+    Merge truly redundant detections (same region found by multiple
+    methods) but keep distinct elements, including nested ones
+    (e.g. a logo inside a header bar).
+    """
+    if not boxes:
+        return []
+
+    filtered = []
+    for bx, by, bw, bh in boxes:
+        a = bw * bh
+        if a < min_area or a > max_area:
+            continue
+        filtered.append((bx, by, bw, bh, a))
+
+    if not filtered:
+        return []
+
+    filtered.sort(key=lambda b: b[4], reverse=True)
+
+    keep = []
+    used = [False] * len(filtered)
+
+    for i in range(len(filtered)):
+        if used[i]:
+            continue
+
+        bx, by, bw, bh, area_i = filtered[i]
+        used[i] = True
+
+        for j in range(i + 1, len(filtered)):
+            if used[j]:
+                continue
+            bx2, by2, bw2, bh2, area_j = filtered[j]
+
+            ox = max(0, min(bx + bw, bx2 + bw2) - max(bx, bx2))
+            oy = max(0, min(by + bh, by2 + bh2) - max(by, by2))
+            inter = ox * oy
+            union = area_i + area_j - inter
+            iou = inter / union if union > 0 else 0
+
+            if iou > 0.55:
+                used[j] = True
+                continue
+
+            contained = inter / area_j if area_j > 0 else 0
+            size_ratio = area_j / area_i if area_i > 0 else 0
+
+            if contained > 0.8 and size_ratio > 0.6:
+                used[j] = True
+
+        keep.append((bx, by, bw, bh))
+
+        if len(keep) >= 50:
             break
 
-    return detected
+    return keep
+
+
+def _deduplicate(items, img_w, img_h):
+    """
+    Remove near-duplicate detections while keeping nested elements.
+    Prefers YOLO labels.  Two items are duplicates only if they cover
+    roughly the same region (high IoU), not if one is inside the other
+    at a different scale.
+    """
+    if not items:
+        return []
+
+    yolo_items = [i for i in items if i.get("source") == "yolo"]
+    other_items = [i for i in items if i.get("source") != "yolo"]
+
+    keep = list(yolo_items)
+
+    for item in other_items:
+        x, y, w, h = item["x"], item["y"], item["width"], item["height"]
+        area = w * h
+        is_dup = False
+
+        for kept in keep:
+            kx, ky, kw, kh = kept["x"], kept["y"], kept["width"], kept["height"]
+            karea = kw * kh
+
+            ox = max(0, min(x + w, kx + kw) - max(x, kx))
+            oy = max(0, min(y + h, ky + kh) - max(y, ky))
+            inter = ox * oy
+            union = area + karea - inter
+            iou = inter / union if union > 0 else 0
+
+            if iou > 0.5:
+                is_dup = True
+                break
+
+            size_ratio = min(area, karea) / max(area, karea) if max(area, karea) > 0 else 0
+            contained = inter / min(area, karea) if min(area, karea) > 0 else 0
+            if contained > 0.8 and size_ratio > 0.6:
+                is_dup = True
+                break
+
+        if not is_dup:
+            keep.append(item)
+
+    return keep[:50]

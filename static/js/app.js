@@ -258,6 +258,9 @@ const App = {
             this.detectedImages = d.images || [];
             this.imageEdits = this.detectedImages.map(im => ({
                 x: im.x, y: im.y, width: im.width, height: im.height,
+                label: im.label || "region",
+                confidence: im.confidence || 0,
+                source: im.source || "opencv",
                 thumbnail: im.thumbnail,
                 replacementFilename: null,
                 replacementUrl: null,
@@ -444,13 +447,16 @@ const App = {
     // ── Image panel ───────────────────────────────────────────────────
     renderImagePanel() {
         const c = document.getElementById("image-panel-content");
+        const hasYolo = this.features.yolo;
+        const engine = hasYolo ? "YOLOv8 + OpenCV" : "OpenCV (multi-method)";
+        const engineClass = hasYolo ? "badge-ai" : "badge-fallback";
 
         let analyzeHtml = `
             <div class="analyze-prompt">
-                <p class="section-info">Seek to a frame with images/logos, then click the button to detect them.</p>
-                <div class="engine-badge badge-ai">Engine: OpenCV (contour detection)</div>
+                <p class="section-info">Seek to a frame with images, logos, or objects, then click to detect them all.</p>
+                <div class="engine-badge ${engineClass}">Engine: ${engine}</div>
                 <button id="analyze-img-btn" class="btn btn-analyze btn-full" onclick="App.analyzeImages()">
-                    Detect Images
+                    Detect Objects &amp; Images
                 </button>
             </div>
         `;
@@ -460,12 +466,27 @@ const App = {
             return;
         }
 
-        let itemsHtml = this.imageEdits.map((ie, i) => `
+        const summary = {};
+        this.detectedImages.forEach(im => {
+            const lbl = im.label || "region";
+            summary[lbl] = (summary[lbl] || 0) + 1;
+        });
+        const summaryText = Object.entries(summary).map(([k, v]) => `${v} ${k}${v > 1 ? "s" : ""}`).join(", ");
+
+        let itemsHtml = `<div class="detection-summary">Found: ${summaryText}</div>`;
+
+        itemsHtml += this.imageEdits.map((ie, i) => {
+            const labelBadge = ie.label && ie.label !== "visual region"
+                ? `<span class="obj-label">${ie.label}</span>`
+                : `<span class="obj-label obj-label-region">region</span>`;
+            const confText = ie.confidence > 0 ? `<span class="conf-text">${Math.round(ie.confidence * 100)}%</span>` : "";
+
+            return `
             <div class="overlay-item ${ie.enabled ? "item-active" : ""}">
                 <div class="overlay-item-header">
                     <label class="toggle-label">
                         <input type="checkbox" data-idx="${i}" class="img-enable-cb" ${ie.enabled ? "checked" : ""}>
-                        <h4>Region #${i + 1}</h4>
+                        <h4>${labelBadge} #${i + 1} ${confText}</h4>
                     </label>
                 </div>
                 <div class="thumb-row">
@@ -479,8 +500,8 @@ const App = {
                         ${ie.replacementUrl ? `<img src="${ie.replacementUrl}" class="bg-preview-thumb">` : ""}
                     </div>
                 </div>
-            </div>
-        `).join("");
+            </div>`;
+        }).join("");
 
         c.innerHTML = analyzeHtml + '<div class="divider"></div>' + itemsHtml;
 
@@ -566,11 +587,22 @@ const App = {
 
         this.imageEdits.forEach((ie) => {
             const x = ie.x * sx, y = ie.y * sy, w = ie.width * sx, h = ie.height * sy;
-            ctx.strokeStyle = ie.enabled ? "#00b894" : "rgba(0,184,148,0.4)";
+            const isYolo = ie.source === "yolo";
+            ctx.strokeStyle = ie.enabled ? "#00b894" : (isYolo ? "rgba(253,203,110,0.6)" : "rgba(0,184,148,0.4)");
             ctx.lineWidth = ie.enabled ? 2 : 1;
             ctx.setLineDash(ie.enabled ? [6, 3] : [4, 4]);
             ctx.strokeRect(x, y, w, h);
             ctx.setLineDash([]);
+
+            if (ie.label && ie.label !== "visual region") {
+                ctx.fillStyle = isYolo ? "rgba(253,203,110,0.8)" : "rgba(0,184,148,0.6)";
+                ctx.font = "bold 11px sans-serif";
+                const lbl = ie.label + (ie.confidence > 0 ? ` ${Math.round(ie.confidence * 100)}%` : "");
+                const tw = ctx.measureText(lbl).width;
+                ctx.fillRect(x, y - 16, tw + 8, 16);
+                ctx.fillStyle = "#000";
+                ctx.fillText(lbl, x + 4, y - 4);
+            }
         });
     },
 

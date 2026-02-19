@@ -101,7 +101,8 @@ def status():
         notes={
             "easyocr": "Full OCR: reads text content" if s["easyocr"] else "Fallback: finds text regions but cannot read content. Install easyocr for full OCR.",
             "rembg": "AI segmentation (U2Net)" if s["rembg"] else "Fallback: GrabCut (OpenCV). Install rembg + onnxruntime for better results.",
-            "opencv": "Image/object detection (always available)",
+            "yolo": "YOLOv8 object detection (80 categories)" if s["yolo"] else "Fallback: OpenCV only. Install ultralytics for better object detection.",
+            "opencv": "Visual region detection (always available)",
         },
     )
 
