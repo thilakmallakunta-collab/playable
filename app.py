@@ -19,10 +19,24 @@ import analyzer
 # ── Find FFmpeg ───────────────────────────────────────────────────────────
 
 def _find_ffmpeg():
-    """Locate ffmpeg binary. Checks PATH, common install locations on Windows."""
+    """Locate ffmpeg binary. Checks pip package, PATH, common Windows locations."""
+    # 1. Try imageio-ffmpeg (pip install imageio-ffmpeg)
+    try:
+        import imageio_ffmpeg
+        ff = imageio_ffmpeg.get_ffmpeg_exe()
+        if ff and Path(ff).exists():
+            ffprobe = str(Path(ff).parent / Path(ff).name.replace("ffmpeg", "ffprobe"))
+            if not Path(ffprobe).exists():
+                ffprobe = ff.replace("ffmpeg", "ffprobe")
+            return str(ff), ffprobe if Path(ffprobe).exists() else str(ff)
+    except Exception:
+        pass
+
+    # 2. Check system PATH
     if shutil.which("ffmpeg"):
         return "ffmpeg", "ffprobe"
 
+    # 3. Common Windows install locations
     if sys.platform == "win32":
         common_paths = [
             Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "ffmpeg" / "bin",
@@ -600,31 +614,56 @@ def _pick_font_file(style: str, family: str) -> str:
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 def _probe(filepath: Path) -> dict:
+    # Try ffprobe first
     try:
-        cmd = [FFPROBE, "-v", "quiet", "-print_format", "json",
-               "-show_format", "-show_streams", str(filepath)]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        info = json.loads(r.stdout)
-        vs = next((s for s in info.get("streams", [])
-                    if s.get("codec_type") == "video"), {})
-        return {
-            "width": int(vs.get("width", 0)),
-            "height": int(vs.get("height", 0)),
-            "duration": float(info.get("format", {}).get("duration", 0)),
-            "codec": vs.get("codec_name", "unknown"),
-        }
+        if FFPROBE and (shutil.which(FFPROBE) or Path(FFPROBE).exists()):
+            cmd = [FFPROBE, "-v", "quiet", "-print_format", "json",
+                   "-show_format", "-show_streams", str(filepath)]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            info = json.loads(r.stdout)
+            vs = next((s for s in info.get("streams", [])
+                        if s.get("codec_type") == "video"), {})
+            return {
+                "width": int(vs.get("width", 0)),
+                "height": int(vs.get("height", 0)),
+                "duration": float(info.get("format", {}).get("duration", 0)),
+                "codec": vs.get("codec_name", "unknown"),
+            }
+    except Exception:
+        pass
+
+    # Fallback: use OpenCV
+    try:
+        cap = cv2.VideoCapture(str(filepath))
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = total / fps if fps > 0 else 0
+        cap.release()
+        return {"width": w, "height": h, "duration": duration, "codec": "unknown"}
     except Exception:
         return {}
 
 
 def _get_fps(filepath: Path) -> float:
     try:
-        cmd = [FFPROBE, "-v", "quiet", "-select_streams", "v:0",
-               "-show_entries", "stream=r_frame_rate",
-               "-of", "csv=p=0", str(filepath)]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        num, den = r.stdout.strip().split("/")
-        return round(int(num) / int(den), 2)
+        if FFPROBE and (shutil.which(FFPROBE) or Path(FFPROBE).exists()):
+            cmd = [FFPROBE, "-v", "quiet", "-select_streams", "v:0",
+                   "-show_entries", "stream=r_frame_rate",
+                   "-of", "csv=p=0", str(filepath)]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            num, den = r.stdout.strip().split("/")
+            return round(int(num) / int(den), 2)
+    except Exception:
+        pass
+
+    # Fallback: OpenCV
+    try:
+        cap = cv2.VideoCapture(str(filepath))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+        return round(fps, 2) if fps > 0 else 30.0
     except Exception:
         return 30.0
 
