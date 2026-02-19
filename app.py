@@ -334,7 +334,10 @@ def _export_with_bg_replace(input_path, output_path, colors, text_edits,
                             image_edits, bg_edit):
     probe = _probe(input_path)
     fps = _get_fps(input_path)
-    w, h = probe["width"], probe["height"]
+    w = probe.get("width", 0)
+    h = probe.get("height", 0)
+    if not w or not h:
+        raise RuntimeError("Could not determine video dimensions")
 
     bg_color = None
     bg_img = None
@@ -351,7 +354,7 @@ def _export_with_bg_replace(input_path, output_path, colors, text_edits,
         rp = ie.get("replacementFilename")
         if rp and (UPLOAD_FOLDER / rp).exists():
             ri = Image.open(UPLOAD_FOLDER / rp).convert("RGBA")
-            ri = ri.resize((ie["width"], ie["height"]))
+            ri = ri.resize((ie.get("width", 200), ie.get("height", 200)))
             replacement_imgs[id(ie)] = (ie, ri)
 
     tmpdir = Path(tempfile.mkdtemp())
@@ -367,8 +370,8 @@ def _export_with_bg_replace(input_path, output_path, colors, text_edits,
             pil = analyzer.replace_background_frame(pil, bg_color=bg_color, bg_image=bg_img)
 
             for key, (ie, ri) in replacement_imgs.items():
-                ox, oy = ie["x"], ie["y"]
-                pil.paste(ri, (ox, oy), ri)
+                ox, oy = ie.get("x", 0), ie.get("y", 0)
+                pil.paste(ri, (int(ox), int(oy)), ri)
 
             out_arr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
             cv2.imwrite(str(tmpdir / f"{frame_idx:06d}.png"), out_arr)
@@ -431,40 +434,33 @@ def _build_text_filters(text_edits: list) -> list[str]:
     filters = []
     for te in text_edits:
         new_text = te.get("newText", "").replace("'", "'\\''").replace(":", "\\:")
-        if not new_text.strip():
-            continue
 
         ox, oy = te.get("x", 0), te.get("y", 0)
         ow, oh = te.get("width", 100), te.get("height", 30)
         fill_color = te.get("fillColor", "black")
-        fill_transparent = te.get("fillTransparent", False)
+        cover_mode = te.get("coverMode", "cover")
         font_size = te.get("fontSize", 24)
         font_color = te.get("fontColor", "white")
         font_style = te.get("fontStyle", "bold")
 
-        if not fill_transparent:
+        if cover_mode == "cover":
             filters.append(
                 f"drawbox=x={ox}:y={oy}:w={ow}:h={oh}:"
                 f"color={fill_color}:t=fill"
             )
+        elif cover_mode == "remove":
+            pad = 2
+            dx = max(0, ox - pad)
+            dy = max(0, oy - pad)
+            dw = ow + pad * 2
+            dh = oh + pad * 2
+            filters.append(f"delogo=x={dx}:y={dy}:w={dw}:h={dh}")
 
-        font_file = ""
-        if "italic" in font_style and "bold" in font_style:
-            font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"
-        elif "italic" in font_style:
-            font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"
-        elif "bold" in font_style:
-            font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        else:
-            font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        if not new_text.strip():
+            continue
 
-        font_family = te.get("fontFamily", "sans-serif")
-        if font_family == "serif":
-            font_file = font_file.replace("DejaVuSans", "DejaVuSerif")
-        elif font_family == "monospace":
-            font_file = font_file.replace("DejaVuSans", "DejaVuSansMono")
-
-        font_part = f"fontfile={font_file}:" if Path(font_file).exists() else ""
+        font_file = _pick_font_file(font_style, te.get("fontFamily", "sans-serif"))
+        font_part = f"fontfile={font_file}:" if font_file and Path(font_file).exists() else ""
 
         filters.append(
             f"drawtext=text='{new_text}':"
@@ -473,6 +469,37 @@ def _build_text_filters(text_edits: list) -> list[str]:
             f"x={ox + 4}:y={oy + 2}"
         )
     return filters
+
+
+def _pick_font_file(style: str, family: str) -> str:
+    base = "DejaVuSans"
+    if family == "serif":
+        base = "DejaVuSerif"
+    elif family == "monospace":
+        base = "DejaVuSansMono"
+
+    if "italic" in style and "bold" in style:
+        variant = "-BoldOblique"
+    elif "italic" in style:
+        variant = "-Oblique"
+    elif "bold" in style:
+        variant = "-Bold"
+    else:
+        variant = ""
+
+    path = f"/usr/share/fonts/truetype/dejavu/{base}{variant}.ttf"
+    if Path(path).exists():
+        return path
+
+    for fallback_dir in ["/usr/share/fonts/truetype/dejavu/",
+                         "/usr/share/fonts/truetype/liberation/",
+                         "C:/Windows/Fonts/"]:
+        p = Path(fallback_dir)
+        if p.exists():
+            fonts = list(p.glob("*.ttf"))
+            if fonts:
+                return str(fonts[0])
+    return ""
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────

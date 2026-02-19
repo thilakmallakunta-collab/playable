@@ -423,7 +423,8 @@ const App = {
                 originalText: t.text, newText: "",
                 x: t.x, y: t.y, width: t.width, height: t.height,
                 fontSize: Math.max(12, Math.round(t.height * 0.7)),
-                fontColor: "white", fillColor: "black", fillTransparent: false,
+                fontColor: "white", fillColor: "black",
+                coverMode: "cover",  // "cover" | "transparent" | "remove"
                 fontStyle: "bold", fontFamily: "sans-serif",
                 enabled: false,
             }));
@@ -508,12 +509,14 @@ const App = {
                             </div>
                         </div>
                         <div class="control-group">
-                            <label class="toggle-label">
-                                <input type="checkbox" class="transparent-cb" data-idx="${i}" ${te.fillTransparent ? "checked" : ""}>
-                                <span class="toggle-text">Transparent background (no cover)</span>
-                            </label>
+                            <label>Old Text Handling</label>
+                            <select class="text-input cover-mode-select" data-idx="${i}">
+                                <option value="cover" ${te.coverMode === "cover" ? "selected" : ""}>Cover with color</option>
+                                <option value="remove" ${te.coverMode === "remove" ? "selected" : ""}>Remove old text, then write new</option>
+                                <option value="transparent" ${te.coverMode === "transparent" ? "selected" : ""}>Write over (keep old text visible)</option>
+                            </select>
                         </div>
-                        <div class="cover-color-row" style="display:${te.fillTransparent ? "none" : "block"}">
+                        <div class="cover-color-row" style="display:${te.coverMode === "cover" ? "block" : "none"}">
                             <div class="control-group">
                                 <label>Cover Color</label>
                                 <input type="color" value="${te.fillColor}" data-idx="${i}" data-key="fillColor">
@@ -546,10 +549,10 @@ const App = {
                 this.drawOverlay();
             });
         });
-        c.querySelectorAll(".transparent-cb").forEach(cb => {
-            cb.addEventListener("change", e => {
+        c.querySelectorAll(".cover-mode-select").forEach(sel => {
+            sel.addEventListener("change", e => {
                 const i = +e.target.dataset.idx;
-                this.textEdits[i].fillTransparent = e.target.checked;
+                this.textEdits[i].coverMode = e.target.value;
                 this.renderTextPanel();
                 this.drawOverlay();
             });
@@ -773,11 +776,19 @@ const App = {
             ctx.strokeStyle = "#6c5ce7";
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, w, h);
+
+            if (te.coverMode === "cover") {
+                ctx.fillStyle = te.fillColor;
+                ctx.fillRect(x, y, w, h);
+            } else if (te.coverMode === "remove") {
+                ctx.fillStyle = "rgba(0,0,0,0.3)";
+                ctx.fillRect(x, y, w, h);
+                ctx.fillStyle = "rgba(255,255,255,0.5)";
+                ctx.font = "10px sans-serif";
+                ctx.fillText("[erased]", x + 4, y + 12);
+            }
+
             if (te.newText) {
-                if (!te.fillTransparent) {
-                    ctx.fillStyle = te.fillColor;
-                    ctx.fillRect(x, y, w, h);
-                }
                 const fStyle = te.fontStyle || "bold";
                 const fFamily = te.fontFamily || "sans-serif";
                 ctx.font = `${fStyle} ${Math.round(te.fontSize * sy)}px ${fFamily}`;
