@@ -131,19 +131,18 @@ def analyze_frame():
 
 @app.route("/analyze/background", methods=["POST"])
 def analyze_background():
-    """Segment the frame into depth-based layers."""
+    """Segment the foreground from background."""
     try:
         data = request.get_json()
         fname = data.get("videoFilename")
         ts = float(data.get("timestamp", 0))
-        num_layers = int(data.get("numLayers", 4))
 
         path = UPLOAD_FOLDER / fname
         if not path.exists():
             return jsonify(error="Video not found"), 404
 
         frame = analyzer.extract_frame(path, ts)
-        result = analyzer.detect_background_layers(frame, num_layers)
+        result = analyzer.detect_background(frame)
         return jsonify(result)
     except Exception as e:
         import traceback
@@ -438,15 +437,38 @@ def _build_text_filters(text_edits: list) -> list[str]:
         ox, oy = te.get("x", 0), te.get("y", 0)
         ow, oh = te.get("width", 100), te.get("height", 30)
         fill_color = te.get("fillColor", "black")
+        fill_transparent = te.get("fillTransparent", False)
         font_size = te.get("fontSize", 24)
         font_color = te.get("fontColor", "white")
+        font_style = te.get("fontStyle", "bold")
+
+        if not fill_transparent:
+            filters.append(
+                f"drawbox=x={ox}:y={oy}:w={ow}:h={oh}:"
+                f"color={fill_color}:t=fill"
+            )
+
+        font_file = ""
+        if "italic" in font_style and "bold" in font_style:
+            font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"
+        elif "italic" in font_style:
+            font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"
+        elif "bold" in font_style:
+            font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        else:
+            font_file = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+        font_family = te.get("fontFamily", "sans-serif")
+        if font_family == "serif":
+            font_file = font_file.replace("DejaVuSans", "DejaVuSerif")
+        elif font_family == "monospace":
+            font_file = font_file.replace("DejaVuSans", "DejaVuSansMono")
+
+        font_part = f"fontfile={font_file}:" if Path(font_file).exists() else ""
 
         filters.append(
-            f"drawbox=x={ox}:y={oy}:w={ow}:h={oh}:"
-            f"color={fill_color}:t=fill"
-        )
-        filters.append(
             f"drawtext=text='{new_text}':"
+            f"{font_part}"
             f"fontsize={font_size}:fontcolor={font_color}:"
             f"x={ox + 4}:y={oy + 2}"
         )

@@ -98,195 +98,87 @@ def frame_to_data_uri(img: Image.Image, fmt: str = "JPEG", quality: int = 85) ->
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 1. LAYERED BACKGROUND DETECTION
+# 1. BACKGROUND DETECTION (foreground/background segmentation)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def detect_background_layers(frame: Image.Image, num_layers: int = 4) -> dict:
-    """
-    Segment the frame into depth-based layers:
-      - Layer 0: Far background
-      - Layer 1: Mid background
-      - ...
-      - Layer N-1: Foreground
-    Each layer gets a mask and a preview image.
-    """
-    if HAS_MIDAS:
-        return _layers_midas(frame, num_layers)
-    return _layers_intensity(frame, num_layers)
+_rembg_session = None
 
 
-def _get_midas():
-    global _midas_model, _midas_transform
-    if _midas_model is None:
-        _midas_model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
-        _midas_model.eval()
-        transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
-        _midas_transform = transforms.small_transform
-    return _midas_model, _midas_transform
+def detect_background(frame: Image.Image) -> dict:
+    if HAS_REMBG:
+        return _detect_bg_rembg(frame)
+    return _detect_bg_grabcut(frame)
 
 
-def _compute_depth(frame: Image.Image) -> np.ndarray:
-    """Return a normalized depth map (0..255, uint8). Higher = closer."""
-    model, transform = _get_midas()
-    arr = np.array(frame)
-    input_batch = transform(arr)
-
-    with torch.no_grad():
-        prediction = model(input_batch)
-        prediction = torch.nn.functional.interpolate(
-            prediction.unsqueeze(1),
-            size=arr.shape[:2],
-            mode="bicubic",
-            align_corners=False,
-        ).squeeze()
-
-    depth = prediction.cpu().numpy()
-    depth = (depth - depth.min()) / (depth.max() - depth.min() + 1e-8) * 255
-    return depth.astype(np.uint8)
-
-
-def _layers_midas(frame: Image.Image, num_layers: int) -> dict:
-    depth = _compute_depth(frame)
-    arr = np.array(frame)
-    h, w = depth.shape
-
-    thresholds = np.linspace(0, 255, num_layers + 1).astype(int)
-    layer_names = _layer_names(num_layers)
-
-    layers = []
-    for i in range(num_layers):
-        lo, hi = int(thresholds[i]), int(thresholds[i + 1])
-        mask = ((depth >= lo) & (depth < hi)).astype(np.uint8) * 255
-        if i == num_layers - 1:
-            mask = ((depth >= lo) & (depth <= hi)).astype(np.uint8) * 255
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-        layer_rgba = np.dstack([arr, mask])
-        layer_img = Image.fromarray(layer_rgba, "RGBA")
-
-        coverage = float(np.count_nonzero(mask) / (h * w))
-
-        layers.append({
-            "index": i,
-            "name": layer_names[i],
-            "preview": frame_to_data_uri(layer_img, fmt="PNG"),
-            "mask": frame_to_data_uri(Image.fromarray(mask).convert("RGB"), fmt="PNG"),
-            "depthRange": [int(lo), int(hi)],
-            "coverage": round(coverage, 3),
-        })
-
-    depth_vis = cv2.applyColorMap(depth, cv2.COLORMAP_INFERNO)
-    depth_vis_rgb = cv2.cvtColor(depth_vis, cv2.COLOR_BGR2RGB)
-
+def _detect_bg_rembg(frame: Image.Image) -> dict:
+    global _rembg_session
+    if _rembg_session is None:
+        _rembg_session = _rembg_new_session("u2net")
+    fg_rgba = _rembg_remove(frame, session=_rembg_session)
+    alpha = fg_rgba.split()[-1]
+    mask = alpha.point(lambda p: 255 if p > 128 else 0)
     return {
-        "layers": layers,
-        "depthMap": frame_to_data_uri(Image.fromarray(depth_vis_rgb), fmt="JPEG"),
-        "width": w,
-        "height": h,
-        "method": "MiDaS depth estimation",
-        "numLayers": num_layers,
+        "foreground": frame_to_data_uri(fg_rgba, fmt="PNG"),
+        "mask": frame_to_data_uri(mask.convert("RGB"), fmt="PNG"),
+        "width": frame.width,
+        "height": frame.height,
+        "method": "rembg (AI)",
     }
 
 
-def _layers_intensity(frame: Image.Image, num_layers: int) -> dict:
-    """Fallback: approximate depth layers using blur + intensity."""
+def _detect_bg_grabcut(frame: Image.Image) -> dict:
     arr = np.array(frame)
-    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    h, w = gray.shape
-
-    blurred_heavy = cv2.GaussianBlur(gray, (51, 51), 0)
-    detail = cv2.absdiff(gray, blurred_heavy)
-    pseudo_depth = cv2.GaussianBlur(detail, (21, 21), 0)
-    pseudo_depth = cv2.normalize(pseudo_depth, None, 0, 255, cv2.NORM_MINMAX)
-
-    thresholds = np.linspace(0, 255, num_layers + 1).astype(int)
-    layer_names = _layer_names(num_layers)
-
-    layers = []
-    for i in range(num_layers):
-        lo, hi = int(thresholds[i]), int(thresholds[i + 1])
-        mask = ((pseudo_depth >= lo) & (pseudo_depth < hi)).astype(np.uint8) * 255
-        if i == num_layers - 1:
-            mask = ((pseudo_depth >= lo) & (pseudo_depth <= hi)).astype(np.uint8) * 255
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-        layer_rgba = np.dstack([arr, mask])
-        layer_img = Image.fromarray(layer_rgba, "RGBA")
-        coverage = float(np.count_nonzero(mask) / (h * w))
-
-        layers.append({
-            "index": i,
-            "name": layer_names[i],
-            "preview": frame_to_data_uri(layer_img, fmt="PNG"),
-            "mask": frame_to_data_uri(Image.fromarray(mask).convert("RGB"), fmt="PNG"),
-            "depthRange": [int(lo), int(hi)],
-            "coverage": round(coverage, 3),
-        })
-
-    depth_vis = cv2.applyColorMap(pseudo_depth, cv2.COLORMAP_INFERNO)
-    depth_vis_rgb = cv2.cvtColor(depth_vis, cv2.COLOR_BGR2RGB)
-
+    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+    h, w = bgr.shape[:2]
+    mask = np.zeros((h, w), np.uint8)
+    bg_model = np.zeros((1, 65), np.float64)
+    fg_model = np.zeros((1, 65), np.float64)
+    margin_x, margin_y = max(10, w // 15), max(10, h // 15)
+    rect = (margin_x, margin_y, w - 2 * margin_x, h - 2 * margin_y)
+    cv2.grabCut(bgr, mask, rect, bg_model, fg_model, 5, cv2.GC_INIT_WITH_RECT)
+    fg_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+    fg_rgba = np.dstack([arr, fg_mask])
+    fg_img = Image.fromarray(fg_rgba, "RGBA")
+    mask_img = Image.fromarray(fg_mask).convert("RGB")
     return {
-        "layers": layers,
-        "depthMap": frame_to_data_uri(Image.fromarray(depth_vis_rgb), fmt="JPEG"),
-        "width": w,
-        "height": h,
-        "method": "Intensity-based (OpenCV fallback)",
-        "numLayers": num_layers,
+        "foreground": frame_to_data_uri(fg_img, fmt="PNG"),
+        "mask": frame_to_data_uri(mask_img, fmt="PNG"),
+        "width": frame.width,
+        "height": frame.height,
+        "method": "GrabCut (OpenCV)",
     }
 
 
-def _layer_names(n: int) -> list[str]:
-    if n <= 2:
-        return ["Background", "Foreground"]
-    if n == 3:
-        return ["Far background", "Mid-ground", "Foreground"]
-    if n == 4:
-        return ["Far background", "Background", "Mid-ground", "Foreground"]
-    return [f"Layer {i}" for i in range(n)]
-
-
-def replace_layer_in_frame(
+def replace_background_frame(
     frame: Image.Image,
-    depth_map: np.ndarray | None,
-    layer_idx: int,
-    num_layers: int,
     bg_color: tuple[int, int, int] | None = None,
     bg_image: Image.Image | None = None,
 ) -> Image.Image:
-    """Replace a single depth layer in one frame."""
-    if depth_map is None:
-        arr = np.array(frame)
-        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-        blurred_heavy = cv2.GaussianBlur(gray, (51, 51), 0)
-        detail = cv2.absdiff(gray, blurred_heavy)
-        depth_map = cv2.GaussianBlur(detail, (21, 21), 0)
-        depth_map = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-
-    thresholds = np.linspace(0, 255, num_layers + 1).astype(int)
-    lo, hi = int(thresholds[layer_idx]), int(thresholds[layer_idx + 1])
-    mask = ((depth_map >= lo) & (depth_map < hi)).astype(np.uint8) * 255
-    if layer_idx == num_layers - 1:
-        mask = ((depth_map >= lo) & (depth_map <= hi)).astype(np.uint8) * 255
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-    arr = np.array(frame)
-    if bg_image is not None:
-        replacement = np.array(bg_image.resize(frame.size).convert("RGB"))
-    elif bg_color is not None:
-        replacement = np.full_like(arr, bg_color)
+    if HAS_REMBG:
+        global _rembg_session
+        if _rembg_session is None:
+            _rembg_session = _rembg_new_session("u2net")
+        fg_rgba = _rembg_remove(frame, session=_rembg_session)
     else:
-        replacement = np.zeros_like(arr)
+        arr = np.array(frame)
+        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        h, w = bgr.shape[:2]
+        mask = np.zeros((h, w), np.uint8)
+        bg_m = np.zeros((1, 65), np.float64)
+        fg_m = np.zeros((1, 65), np.float64)
+        mx, my = max(10, w // 15), max(10, h // 15)
+        cv2.grabCut(bgr, mask, (mx, my, w - 2*mx, h - 2*my), bg_m, fg_m, 5, cv2.GC_INIT_WITH_RECT)
+        fg_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+        fg_rgba = Image.fromarray(np.dstack([arr, fg_mask]), "RGBA")
 
-    mask_3 = np.dstack([mask, mask, mask]) / 255.0
-    result = (arr * (1 - mask_3) + replacement * mask_3).astype(np.uint8)
-    return Image.fromarray(result)
+    if bg_image is not None:
+        bg = bg_image.resize(frame.size).convert("RGBA")
+    elif bg_color is not None:
+        bg = Image.new("RGBA", frame.size, (*bg_color, 255))
+    else:
+        bg = Image.new("RGBA", frame.size, (0, 0, 0, 255))
+    bg.paste(fg_rgba, mask=fg_rgba.split()[-1])
+    return bg.convert("RGB")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

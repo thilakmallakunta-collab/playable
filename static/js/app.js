@@ -5,9 +5,9 @@ const App = {
 
     features: { easyocr: false, rembg: false, yolo: false, midas: false, opencv: true },
 
-    // Background layers
-    bgLayers: null,
-    bgLayerEdits: [],
+    // Background
+    backgroundData: null,
+    backgroundEdit: { enabled: false, color: "#000000", imageFilename: null, imageUrl: null },
 
     // Text
     detectedTexts: [],
@@ -298,116 +298,88 @@ const App = {
         const btn = document.getElementById("analyze-bg-btn");
         if (!btn) return;
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Analyzing depth layers...';
+        btn.innerHTML = '<span class="spinner"></span> Detecting background...';
 
         try {
             const ts = this.videoEl.currentTime || 0;
-            const numLayers = parseInt(document.getElementById("num-layers-select")?.value || "4");
             const res = await fetch("/analyze/background", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts, numLayers }),
+                body: JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts }),
             });
             const d = await res.json();
             if (!res.ok) throw new Error(d.error);
 
-            this.bgLayers = d;
-            this.bgLayerEdits = d.layers.map(l => ({
-                index: l.index, name: l.name, enabled: false,
-                color: "#000000", imageFilename: null, imageUrl: null,
-            }));
+            this.backgroundData = d;
             this.renderBgPanel();
-            this.toast(`${d.numLayers} background layers detected (${d.method})`, "success");
+            this.toast("Background detected! (" + d.method + ")", "success");
         } catch (e) {
-            this.toast("Background analysis failed: " + e.message, "error");
+            this.toast("Background detection failed: " + e.message, "error");
         }
         btn.disabled = false;
-        btn.textContent = "Re-analyze Layers";
+        btn.textContent = "Re-detect Background";
     },
 
     renderBgPanel() {
         const c = document.getElementById("bg-panel-content");
-        const engine = this.features.midas ? "MiDaS depth" : "Intensity-based";
-        const engineClass = this.features.midas ? "badge-ai" : "badge-fallback";
+        const engine = this.features.rembg ? "rembg (AI)" : "GrabCut (OpenCV)";
+        const engineClass = this.features.rembg ? "badge-ai" : "badge-fallback";
 
         let html = `
             <div class="analyze-prompt">
-                <p class="section-info">Detects depth layers in the frame. Each layer can be replaced independently.</p>
+                <p class="section-info">Separates the foreground from the background. You can replace the background with a color or image.</p>
                 <div class="engine-badge ${engineClass}">Engine: ${engine}</div>
-                <div class="inline-fields" style="margin-bottom:10px">
-                    <div class="control-group">
-                        <label>Layers</label>
-                        <select id="num-layers-select" class="text-input">
-                            <option value="3" ${this.bgLayers?.numLayers === 3 ? "selected" : ""}>3 layers</option>
-                            <option value="4" ${!this.bgLayers || this.bgLayers?.numLayers === 4 ? "selected" : ""}>4 layers</option>
-                            <option value="5" ${this.bgLayers?.numLayers === 5 ? "selected" : ""}>5 layers</option>
-                        </select>
-                    </div>
-                    <div style="display:flex;align-items:end">
-                        <button id="analyze-bg-btn" class="btn btn-analyze btn-full" onclick="App.analyzeBackground()">
-                            ${this.bgLayers ? "Re-analyze" : "Detect Layers"}
-                        </button>
-                    </div>
-                </div>
+                <button id="analyze-bg-btn" class="btn btn-analyze btn-full" onclick="App.analyzeBackground()">
+                    ${this.backgroundData ? "Re-detect Background" : "Detect Background"}
+                </button>
             </div>
         `;
 
-        if (this.bgLayers) {
+        if (this.backgroundData) {
             html += `
                 <div class="divider"></div>
-                <p class="section-label">Depth Map</p>
-                <img src="${this.bgLayers.depthMap}" class="detection-img" style="margin-bottom:16px">
+                <div class="detection-preview">
+                    <p class="section-label">Detected Foreground</p>
+                    <img src="${this.backgroundData.foreground}" class="detection-img">
+                </div>
+                <div class="divider"></div>
+                <div class="control-group">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="bg-enable" ${this.backgroundEdit.enabled ? "checked" : ""}>
+                        <span class="toggle-text">Enable Background Replacement</span>
+                    </label>
+                </div>
+                <div id="bg-options" style="display:${this.backgroundEdit.enabled ? "block" : "none"}">
+                    <div class="control-group">
+                        <label>Replacement Color</label>
+                        <input type="color" id="bg-color" value="${this.backgroundEdit.color}">
+                    </div>
+                    <div class="divider-sm"></div>
+                    <div class="control-group">
+                        <label>Or Upload Background Image</label>
+                        <button class="btn btn-secondary btn-sm" id="bg-img-upload-btn">Choose Image</button>
+                        ${this.backgroundEdit.imageUrl ? `<img src="${this.backgroundEdit.imageUrl}" class="bg-preview-thumb">` : ""}
+                    </div>
+                </div>
             `;
-
-            this.bgLayers.layers.forEach((layer, i) => {
-                const edit = this.bgLayerEdits[i];
-                html += `
-                <div class="overlay-item ${edit.enabled ? "item-active" : ""}">
-                    <div class="overlay-item-header">
-                        <label class="toggle-label">
-                            <input type="checkbox" class="layer-enable-cb" data-idx="${i}" ${edit.enabled ? "checked" : ""}>
-                            <h4>${layer.name}</h4>
-                        </label>
-                        <span class="coverage-badge">${Math.round(layer.coverage * 100)}%</span>
-                    </div>
-                    <img src="${layer.preview}" class="layer-thumb">
-                    <div class="edit-fields" style="display:${edit.enabled ? "block" : "none"}">
-                        <div class="control-group">
-                            <label>Replace with color</label>
-                            <input type="color" value="${edit.color}" class="layer-color" data-idx="${i}">
-                        </div>
-                        <div class="control-group">
-                            <label>Or upload image</label>
-                            <button class="btn btn-secondary btn-sm layer-img-btn" data-idx="${i}">Choose Image</button>
-                            ${edit.imageUrl ? `<img src="${edit.imageUrl}" class="bg-preview-thumb">` : ""}
-                        </div>
-                    </div>
-                </div>`;
-            });
         }
 
         c.innerHTML = html;
 
-        c.querySelectorAll(".layer-enable-cb").forEach(cb => {
-            cb.addEventListener("change", e => {
-                this.bgLayerEdits[+e.target.dataset.idx].enabled = e.target.checked;
-                this.renderBgPanel();
-            });
+        document.getElementById("bg-enable")?.addEventListener("change", e => {
+            this.backgroundEdit.enabled = e.target.checked;
+            document.getElementById("bg-options").style.display = e.target.checked ? "block" : "none";
         });
-        c.querySelectorAll(".layer-color").forEach(el => {
-            el.addEventListener("input", e => {
-                const edit = this.bgLayerEdits[+e.target.dataset.idx];
-                edit.color = e.target.value;
-                edit.imageFilename = null;
-                edit.imageUrl = null;
-            });
+        document.getElementById("bg-color")?.addEventListener("input", e => {
+            this.backgroundEdit.color = e.target.value;
+            this.backgroundEdit.imageFilename = null;
+            this.backgroundEdit.imageUrl = null;
+            this.renderBgPanel();
         });
-        c.querySelectorAll(".layer-img-btn").forEach(btn => {
-            btn.addEventListener("click", e => this.uploadLayerBgImage(+e.target.dataset.idx));
-        });
+        document.getElementById("bg-img-upload-btn")?.addEventListener("click", () => this.uploadBgImage());
     },
 
-    async uploadLayerBgImage(idx) {
+    async uploadBgImage() {
         const input = document.createElement("input");
         input.type = "file"; input.accept = "image/*";
         input.onchange = async () => {
@@ -418,9 +390,10 @@ const App = {
                 const res = await fetch("/upload/image", { method: "POST", body: fd });
                 const d = await res.json();
                 if (!res.ok) throw new Error(d.error);
-                this.bgLayerEdits[idx].imageFilename = d.filename;
-                this.bgLayerEdits[idx].imageUrl = d.url;
+                this.backgroundEdit.imageFilename = d.filename;
+                this.backgroundEdit.imageUrl = d.url;
                 this.renderBgPanel();
+                this.toast("Background image uploaded!", "success");
             } catch (e) { this.toast(e.message, "error"); }
         };
         input.click();
@@ -450,7 +423,9 @@ const App = {
                 originalText: t.text, newText: "",
                 x: t.x, y: t.y, width: t.width, height: t.height,
                 fontSize: Math.max(12, Math.round(t.height * 0.7)),
-                fontColor: "white", fillColor: "black", enabled: false,
+                fontColor: "white", fillColor: "black", fillTransparent: false,
+                fontStyle: "bold", fontFamily: "sans-serif",
+                enabled: false,
             }));
             this.renderTextPanel();
             this.toast(`Found ${this.detectedTexts.length} text region(s)`, "success");
@@ -511,9 +486,38 @@ const App = {
                                 <input type="color" value="${te.fontColor}" data-idx="${i}" data-key="fontColor">
                             </div>
                         </div>
+                        <div class="inline-fields">
+                            <div class="control-group">
+                                <label>Font Style</label>
+                                <select class="text-input" data-idx="${i}" data-key="fontStyle">
+                                    <option value="bold" ${te.fontStyle === "bold" ? "selected" : ""}>Bold</option>
+                                    <option value="normal" ${te.fontStyle === "normal" ? "selected" : ""}>Normal</option>
+                                    <option value="italic" ${te.fontStyle === "italic" ? "selected" : ""}>Italic</option>
+                                    <option value="bold italic" ${te.fontStyle === "bold italic" ? "selected" : ""}>Bold Italic</option>
+                                </select>
+                            </div>
+                            <div class="control-group">
+                                <label>Font Family</label>
+                                <select class="text-input" data-idx="${i}" data-key="fontFamily">
+                                    <option value="sans-serif" ${te.fontFamily === "sans-serif" ? "selected" : ""}>Sans-serif</option>
+                                    <option value="serif" ${te.fontFamily === "serif" ? "selected" : ""}>Serif</option>
+                                    <option value="monospace" ${te.fontFamily === "monospace" ? "selected" : ""}>Monospace</option>
+                                    <option value="cursive" ${te.fontFamily === "cursive" ? "selected" : ""}>Cursive</option>
+                                    <option value="fantasy" ${te.fontFamily === "fantasy" ? "selected" : ""}>Fantasy</option>
+                                </select>
+                            </div>
+                        </div>
                         <div class="control-group">
-                            <label>Cover Color</label>
-                            <input type="color" value="${te.fillColor}" data-idx="${i}" data-key="fillColor">
+                            <label class="toggle-label">
+                                <input type="checkbox" class="transparent-cb" data-idx="${i}" ${te.fillTransparent ? "checked" : ""}>
+                                <span class="toggle-text">Transparent background (no cover)</span>
+                            </label>
+                        </div>
+                        <div class="cover-color-row" style="display:${te.fillTransparent ? "none" : "block"}">
+                            <div class="control-group">
+                                <label>Cover Color</label>
+                                <input type="color" value="${te.fillColor}" data-idx="${i}" data-key="fillColor">
+                            </div>
                         </div>
                     </div>
                 </div>`;
@@ -534,10 +538,19 @@ const App = {
             });
         });
         c.querySelectorAll("[data-key]").forEach(el => {
-            el.addEventListener("input", e => {
+            const evType = (el.tagName === "SELECT") ? "change" : "input";
+            el.addEventListener(evType, e => {
                 const i = +e.target.dataset.idx;
                 const k = e.target.dataset.key;
                 this.textEdits[i][k] = (e.target.type === "number") ? +e.target.value : e.target.value;
+                this.drawOverlay();
+            });
+        });
+        c.querySelectorAll(".transparent-cb").forEach(cb => {
+            cb.addEventListener("change", e => {
+                const i = +e.target.dataset.idx;
+                this.textEdits[i].fillTransparent = e.target.checked;
+                this.renderTextPanel();
                 this.drawOverlay();
             });
         });
@@ -754,7 +767,6 @@ const App = {
         const vh = this.videoProbe?.height || this.videoEl.videoHeight || 1080;
         const sx = cw / vw, sy = ch / vh;
 
-        // Only draw enabled text edits with replacement text
         this.textEdits.forEach(te => {
             if (!te.enabled) return;
             const x = te.x * sx, y = te.y * sy, w = te.width * sx, h = te.height * sy;
@@ -762,9 +774,13 @@ const App = {
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, w, h);
             if (te.newText) {
-                ctx.fillStyle = te.fillColor;
-                ctx.fillRect(x, y, w, h);
-                ctx.font = `bold ${Math.round(te.fontSize * sy)}px sans-serif`;
+                if (!te.fillTransparent) {
+                    ctx.fillStyle = te.fillColor;
+                    ctx.fillRect(x, y, w, h);
+                }
+                const fStyle = te.fontStyle || "bold";
+                const fFamily = te.fontFamily || "sans-serif";
+                ctx.font = `${fStyle} ${Math.round(te.fontSize * sy)}px ${fFamily}`;
                 ctx.fillStyle = te.fontColor;
                 ctx.fillText(te.newText, x + 4, y + h - 4 * sy);
             }
@@ -798,16 +814,16 @@ const App = {
         const activeTexts = this.textEdits.filter(t => t.enabled && t.newText.trim());
         const allImgEdits = [...this.imageEdits, ...this.videoScanEdits];
         const activeImgs = allImgEdits.filter(i => i.enabled && i.replacementFilename);
-        const activeLayers = this.bgLayerEdits.filter(l => l.enabled);
+        const bgActive = this.backgroundEdit.enabled;
         const hasColorChange = Object.entries(this.colors).some(([k, v]) => k.startsWith("gamma") ? v !== 1 : v !== 0);
 
-        if (!activeLayers.length && !activeTexts.length && !activeImgs.length && !hasColorChange) {
+        if (!bgActive && !activeTexts.length && !activeImgs.length && !hasColorChange) {
             this.toast("Nothing to change. Adjust some settings first.", "info");
             return;
         }
 
         this.showModal("Exporting Video",
-            activeLayers.length ? "Replacing background layers frame-by-frame..." : "Rendering...",
+            bgActive ? "Replacing background frame-by-frame..." : "Rendering...",
             true);
 
         const payload = {
@@ -815,7 +831,7 @@ const App = {
             colors: { ...this.colors },
             textEdits: activeTexts,
             imageEdits: activeImgs,
-            backgroundEdit: activeLayers.length ? { enabled: true, layers: activeLayers } : null,
+            backgroundEdit: bgActive ? this.backgroundEdit : null,
         };
 
         try {
