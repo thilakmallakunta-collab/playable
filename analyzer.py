@@ -271,8 +271,28 @@ def _merge_text_boxes(bboxes, img_w, img_h):
 # 3. IMAGE / OBJECT DETECTION
 # ═══════════════════════════════════════════════════════════════════════════
 
-_yolo_model = None
+_yolo_det_model = None
+_yolo_seg_model = None
 _rembg_session = None
+
+YOLO_CATEGORIES = {
+    "people": ["person"],
+    "animals": ["bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"],
+    "vehicles": ["bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat"],
+    "food": ["banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake"],
+    "furniture": ["chair", "couch", "bed", "dining table", "toilet"],
+    "electronics": ["tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "refrigerator"],
+    "sports": ["frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket"],
+    "accessories": ["backpack", "umbrella", "handbag", "tie", "suitcase"],
+    "kitchen": ["bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl"],
+    "other": ["traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "potted plant", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush", "sink"],
+}
+
+def _get_category(label: str) -> str:
+    for cat, items in YOLO_CATEGORIES.items():
+        if label in items:
+            return cat
+    return "other"
 
 
 def detect_images(frame: Image.Image) -> list[dict]:
@@ -281,19 +301,22 @@ def detect_images(frame: Image.Image) -> list[dict]:
         results.extend(_detect_yolo(frame))
     results.extend(_detect_visual_regions(frame))
     results = _deduplicate(results, frame.width, frame.height)
-    results.sort(key=lambda d: d["area"], reverse=True)
+    results.sort(key=lambda d: (-d.get("confidence", 0), -d["area"]))
     for idx, r in enumerate(results):
         r["index"] = idx
     return results
 
 
 def _detect_yolo(frame: Image.Image) -> list[dict]:
-    global _yolo_model
-    if _yolo_model is None:
-        _yolo_model = _YOLO("yolov8n.pt")
+    global _yolo_det_model, _yolo_seg_model
+
+    if _yolo_det_model is None:
+        model_path = "yolov8m.pt" if Path("yolov8m.pt").exists() else "yolov8n.pt"
+        _yolo_det_model = _YOLO(model_path)
 
     arr = np.array(frame)
-    preds = _yolo_model(arr, verbose=False, conf=0.25)
+
+    preds = _yolo_det_model(arr, verbose=False, conf=0.15, iou=0.4)
 
     detected = []
     for result in preds:
@@ -302,15 +325,22 @@ def _detect_yolo(frame: Image.Image) -> list[dict]:
             conf = float(box.conf[0])
             cls_id = int(box.cls[0])
             label = result.names[cls_id]
+            category = _get_category(label)
             x, y, w, h = int(x1), int(y1), int(x2 - x1), int(y2 - y1)
             if w < 5 or h < 5:
                 continue
-            thumb = frame.crop((x, y, x + w, y + h))
+
+            thumb = frame.crop((max(0, x), max(0, y),
+                                min(frame.width, x + w), min(frame.height, y + h)))
             thumb.thumbnail((120, 120))
+
             detected.append({
                 "x": x, "y": y, "width": w, "height": h,
-                "area": w * h, "label": label,
-                "confidence": round(conf, 3), "source": "yolo",
+                "area": w * h,
+                "label": label,
+                "category": category,
+                "confidence": round(conf, 3),
+                "source": "yolo",
                 "thumbnail": frame_to_data_uri(thumb, fmt="JPEG", quality=70),
             })
     return detected

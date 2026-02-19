@@ -581,7 +581,8 @@ const App = {
             this.detectedImages = d.images || [];
             this.imageEdits = this.detectedImages.map(im => ({
                 x: im.x, y: im.y, width: im.width, height: im.height,
-                label: im.label || "region", confidence: im.confidence || 0,
+                label: im.label || "region", category: im.category || "",
+                confidence: im.confidence || 0,
                 source: im.source || "opencv", thumbnail: im.thumbnail,
                 replacementFilename: null, replacementUrl: null, enabled: false,
             }));
@@ -682,34 +683,57 @@ const App = {
     },
 
     _renderObjectList(edits, prefix, showTime) {
-        return edits.map((ie, i) => {
-            const labelBadge = ie.label && ie.label !== "visual region"
-                ? `<span class="obj-label">${ie.label}</span>`
-                : `<span class="obj-label obj-label-region">region</span>`;
-            const confText = ie.confidence > 0 ? `<span class="conf-text">${Math.round(ie.confidence * 100)}%</span>` : "";
-            const timeText = showTime && ie.timeRange ? `<div class="time-badge">${ie.timeRange} (${ie.appearances}x)</div>` : "";
+        // Group by category
+        const grouped = {};
+        edits.forEach((ie, i) => {
+            const cat = ie.category || (ie.label === "visual region" ? "visual regions" : "detected");
+            if (!grouped[cat]) grouped[cat] = [];
+            grouped[cat].push({ ie, i });
+        });
 
-            return `
-            <div class="overlay-item ${ie.enabled ? "item-active" : ""}">
-                <div class="overlay-item-header">
-                    <label class="toggle-label">
-                        <input type="checkbox" data-prefix="${prefix}" data-idx="${i}" class="obj-enable-cb" ${ie.enabled ? "checked" : ""}>
-                        <h4>${labelBadge} ${confText}</h4>
-                    </label>
-                </div>
-                <div class="thumb-row">
-                    <img src="${ie.thumbnail}" class="region-thumb">
-                    <div class="detected-pos">${ie.x}, ${ie.y} &mdash; ${ie.width}x${ie.height}${timeText}</div>
-                </div>
-                <div class="edit-fields" style="display:${ie.enabled ? "block" : "none"}">
-                    <div class="control-group">
-                        <label>Replacement Image</label>
-                        <button class="btn btn-secondary btn-sm obj-replace-btn" data-prefix="${prefix}" data-idx="${i}">Upload Replacement</button>
-                        ${ie.replacementUrl ? `<img src="${ie.replacementUrl}" class="bg-preview-thumb">` : ""}
+        let html = "";
+        const catOrder = ["people", "animals", "food", "vehicles", "sports", "electronics", "furniture", "kitchen", "accessories", "other", "visual regions", "detected"];
+
+        const sortedCats = Object.keys(grouped).sort((a, b) => {
+            const ai = catOrder.indexOf(a), bi = catOrder.indexOf(b);
+            return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+        });
+
+        for (const cat of sortedCats) {
+            const items = grouped[cat];
+            const catIcon = { people: "👤", animals: "🐾", food: "🍎", vehicles: "🚗", sports: "⚽", electronics: "📱", furniture: "🪑", kitchen: "🍽", accessories: "👜", other: "📦" }[cat] || "🔍";
+            html += `<div class="category-header">${catIcon} ${cat.charAt(0).toUpperCase() + cat.slice(1)} <span class="cat-count">${items.length}</span></div>`;
+
+            for (const { ie, i } of items) {
+                const labelBadge = ie.label && ie.label !== "visual region"
+                    ? `<span class="obj-label">${ie.label}</span>`
+                    : `<span class="obj-label obj-label-region">region</span>`;
+                const confText = ie.confidence > 0 ? `<span class="conf-text">${Math.round(ie.confidence * 100)}%</span>` : "";
+                const timeText = showTime && ie.timeRange ? `<div class="time-badge">${ie.timeRange} (${ie.appearances}x)</div>` : "";
+
+                html += `
+                <div class="overlay-item ${ie.enabled ? "item-active" : ""}">
+                    <div class="overlay-item-header">
+                        <label class="toggle-label">
+                            <input type="checkbox" data-prefix="${prefix}" data-idx="${i}" class="obj-enable-cb" ${ie.enabled ? "checked" : ""}>
+                            <h4>${labelBadge} ${confText}</h4>
+                        </label>
                     </div>
-                </div>
-            </div>`;
-        }).join("");
+                    <div class="thumb-row">
+                        <img src="${ie.thumbnail}" class="region-thumb">
+                        <div class="detected-pos">${ie.x}, ${ie.y} &mdash; ${ie.width}x${ie.height}${timeText}</div>
+                    </div>
+                    <div class="edit-fields" style="display:${ie.enabled ? "block" : "none"}">
+                        <div class="control-group">
+                            <label>Replacement Image</label>
+                            <button class="btn btn-secondary btn-sm obj-replace-btn" data-prefix="${prefix}" data-idx="${i}">Upload Replacement</button>
+                            ${ie.replacementUrl ? `<img src="${ie.replacementUrl}" class="bg-preview-thumb">` : ""}
+                        </div>
+                    </div>
+                </div>`;
+            }
+        }
+        return html;
     },
 
     _bindObjectListEvents(container, prefix, edits) {
