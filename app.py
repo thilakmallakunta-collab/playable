@@ -99,9 +99,10 @@ def status():
     return jsonify(
         features=s,
         notes={
-            "easyocr": "Full OCR: reads text content" if s["easyocr"] else "Fallback: finds text regions but cannot read content. Install easyocr for full OCR.",
-            "rembg": "AI segmentation (U2Net)" if s["rembg"] else "Fallback: GrabCut (OpenCV). Install rembg + onnxruntime for better results.",
-            "yolo": "YOLOv8 object detection (80 categories)" if s["yolo"] else "Fallback: OpenCV only. Install ultralytics for better object detection.",
+            "easyocr": "Full OCR: reads text content" if s["easyocr"] else "Fallback: finds text regions but cannot read content.",
+            "rembg": "AI segmentation (U2Net)" if s["rembg"] else "Fallback: GrabCut (OpenCV).",
+            "yolo": "YOLOv8 object detection (80 categories)" if s["yolo"] else "Fallback: OpenCV only.",
+            "midas": "MiDaS depth-based layer separation" if s["midas"] else "Fallback: intensity-based layers.",
             "opencv": "Visual region detection (always available)",
         },
     )
@@ -130,18 +131,19 @@ def analyze_frame():
 
 @app.route("/analyze/background", methods=["POST"])
 def analyze_background():
-    """Segment the background from the foreground."""
+    """Segment the frame into depth-based layers."""
     try:
         data = request.get_json()
         fname = data.get("videoFilename")
         ts = float(data.get("timestamp", 0))
+        num_layers = int(data.get("numLayers", 4))
 
         path = UPLOAD_FOLDER / fname
         if not path.exists():
             return jsonify(error="Video not found"), 404
 
         frame = analyzer.extract_frame(path, ts)
-        result = analyzer.detect_background(frame)
+        result = analyzer.detect_background_layers(frame, num_layers)
         return jsonify(result)
     except Exception as e:
         import traceback
@@ -199,6 +201,29 @@ def analyze_images():
         import traceback
         traceback.print_exc()
         return jsonify(error=f"Image analysis failed: {e}"), 500
+
+
+@app.route("/analyze/video-scan", methods=["POST"])
+def analyze_video_scan():
+    """Scan entire video for objects/images across all frames."""
+    try:
+        data = request.get_json()
+        fname = data.get("videoFilename")
+        interval = float(data.get("interval", 1.0))
+
+        path = UPLOAD_FOLDER / fname
+        if not path.exists():
+            return jsonify(error="Video not found"), 404
+
+        objects = analyzer.scan_video_objects(path, sample_interval=interval)
+        return jsonify(
+            objects=objects,
+            count=len(objects),
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify(error=f"Video scan failed: {e}"), 500
 
 
 # ── Export ─────────────────────────────────────────────────────────────────
