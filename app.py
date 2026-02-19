@@ -284,6 +284,8 @@ def analyze_custom_search():
             count=len(results),
             searchTerms=search_terms,
         )
+    except ImportError as e:
+        return jsonify(error=f"Custom search requires the 'clip' package which failed to install on your Python version. Try: python -m pip install --force-reinstall setuptools && python -m pip install openai-clip. Error: {e}"), 500
     except Exception as e:
         import traceback
         traceback.print_exc()

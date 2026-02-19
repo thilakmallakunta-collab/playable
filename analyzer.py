@@ -331,17 +331,29 @@ def detect_custom_objects(frame: Image.Image, search_terms: list[str]) -> list[d
     Uses YOLO-World to search for custom categories like 'trophy',
     'medal', 'logo', 'jersey', etc.
     """
+    if not HAS_YOLO:
+        raise ImportError("ultralytics not installed")
+
     global _yolo_world_model
 
-    if _yolo_world_model is None:
-        _yolo_world_model = _YOLO("yolov8x-worldv2.pt")
+    try:
+        if _yolo_world_model is None:
+            _yolo_world_model = _YOLO("yolov8x-worldv2.pt")
 
-    _yolo_world_model.set_classes(search_terms)
+        _yolo_world_model.set_classes(search_terms)
 
-    arr = np.array(frame)
-    preds = _yolo_world_model(arr, verbose=False, conf=0.08)
+        arr = np.array(frame)
+        preds = _yolo_world_model(arr, verbose=False, conf=0.08)
 
-    return _parse_yolo_results(preds, frame, source="yolo-world")
+        return _parse_yolo_results(preds, frame, source="yolo-world")
+    except Exception as e:
+        if "clip" in str(e).lower() or "pkg_resources" in str(e).lower():
+            raise ImportError(
+                f"YOLO-World needs the 'clip' package. "
+                f"Run: python -m pip install --force-reinstall setuptools && "
+                f"python -m pip install openai-clip. Original error: {e}"
+            )
+        raise
 
 
 def _parse_yolo_results(preds, frame, source="yolo"):
