@@ -420,6 +420,7 @@ const App = {
     addNewTextBox() {
         const vw = this.videoProbe?.width || 1280;
         const vh = this.videoProbe?.height || 720;
+        const curTime = Math.floor(this.videoEl.currentTime * 10) / 10;
         this.textEdits.push({
             originalText: "", newText: "Your text here",
             x: Math.round(vw * 0.1), y: Math.round(vh * 0.1),
@@ -427,6 +428,7 @@ const App = {
             fontSize: 36, fontColor: "#ffffff", fillColor: "#000000",
             coverMode: "transparent",
             fontStyle: "bold", fontFamily: "sans-serif",
+            startTime: curTime, endTime: Math.min(curTime + 5, this.videoEl.duration || 9999),
             enabled: true, isCustom: true,
         });
         this.showOverlay = true;
@@ -456,13 +458,15 @@ const App = {
             if (!res.ok) throw new Error(d.error);
 
             this.detectedTexts = d.texts || [];
+            const curTime = Math.floor(this.videoEl.currentTime * 10) / 10;
             this.textEdits = this.detectedTexts.map(t => ({
                 originalText: t.text, newText: "",
                 x: t.x, y: t.y, width: t.width, height: t.height,
                 fontSize: Math.max(12, Math.round(t.height * 0.7)),
                 fontColor: "white", fillColor: "black",
-                coverMode: "cover",  // "cover" | "transparent" | "remove"
+                coverMode: "cover",
                 fontStyle: "bold", fontFamily: "sans-serif",
+                startTime: curTime, endTime: Math.min(curTime + 5, this.videoEl.duration || 9999),
                 enabled: false,
             }));
             this.renderTextPanel();
@@ -537,6 +541,21 @@ const App = {
                     </div>
                 `;
                 const deleteBtn = isCustom ? `<button class="btn btn-danger btn-sm" onclick="App.removeTextEdit(${i})">Delete</button>` : "";
+                const timeFields = `
+                    <div class="inline-fields">
+                        <div class="control-group">
+                            <label>Start (sec)</label>
+                            <input type="number" class="number-input" value="${te.startTime}" min="0" step="0.1"
+                                data-idx="${i}" data-key="startTime">
+                        </div>
+                        <div class="control-group">
+                            <label>End (sec)</label>
+                            <input type="number" class="number-input" value="${te.endTime}" min="0" step="0.1"
+                                data-idx="${i}" data-key="endTime">
+                        </div>
+                    </div>
+                    <div class="time-hint">Only affects ${te.startTime}s – ${te.endTime}s of the video</div>
+                `;
 
                 html += `
                 <div class="overlay-item ${te.enabled ? "item-active" : ""}">
@@ -588,6 +607,7 @@ const App = {
                             </div>
                         </div>
                         ${oldTextHandling}
+                        ${timeFields}
                     </div>
                 </div>`;
             });
@@ -645,11 +665,13 @@ const App = {
             if (!res.ok) throw new Error(d.error);
 
             this.detectedImages = d.images || [];
+            const curTime = Math.floor(this.videoEl.currentTime * 10) / 10;
             this.imageEdits = this.detectedImages.map(im => ({
                 x: im.x, y: im.y, width: im.width, height: im.height,
                 label: im.label || "region", category: im.category || "",
                 confidence: im.confidence || 0,
                 source: im.source || "opencv", thumbnail: im.thumbnail,
+                startTime: 0, endTime: this.videoEl.duration || 9999,
                 replacementFilename: null, replacementUrl: null, enabled: false,
             }));
             this.renderImagePanel();
@@ -825,6 +847,7 @@ const App = {
                 const confText = ie.confidence > 0 ? `<span class="conf-text">${Math.round(ie.confidence * 100)}%</span>` : "";
                 const timeText = showTime && ie.timeRange ? `<div class="time-badge">${ie.timeRange} (${ie.appearances}x)</div>` : "";
 
+                const hasTime = (ie.startTime !== undefined);
                 html += `
                 <div class="overlay-item ${ie.enabled ? "item-active" : ""}">
                     <div class="overlay-item-header">
@@ -843,6 +866,21 @@ const App = {
                             <button class="btn btn-secondary btn-sm obj-replace-btn" data-prefix="${prefix}" data-idx="${i}">Upload Replacement</button>
                             ${ie.replacementUrl ? `<img src="${ie.replacementUrl}" class="bg-preview-thumb">` : ""}
                         </div>
+                        ${hasTime ? `
+                        <div class="inline-fields" style="margin-top:8px">
+                            <div class="control-group">
+                                <label>Start (sec)</label>
+                                <input type="number" class="number-input obj-time-input" value="${ie.startTime}" min="0" step="0.1"
+                                    data-prefix="${prefix}" data-idx="${i}" data-key="startTime">
+                            </div>
+                            <div class="control-group">
+                                <label>End (sec)</label>
+                                <input type="number" class="number-input obj-time-input" value="${ie.endTime}" min="0" step="0.1"
+                                    data-prefix="${prefix}" data-idx="${i}" data-key="endTime">
+                            </div>
+                        </div>
+                        <div class="time-hint">Replacement active ${ie.startTime}s – ${ie.endTime}s</div>
+                        ` : ""}
                     </div>
                 </div>`;
             }
@@ -862,6 +900,13 @@ const App = {
             btn.addEventListener("click", e => {
                 const idx = +e.target.dataset.idx;
                 this._uploadReplacementFor(edits, idx);
+            });
+        });
+        container.querySelectorAll(`.obj-time-input[data-prefix="${prefix}"]`).forEach(el => {
+            el.addEventListener("input", e => {
+                const idx = +e.target.dataset.idx;
+                const key = e.target.dataset.key;
+                edits[idx][key] = +e.target.value;
             });
         });
     },

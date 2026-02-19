@@ -8,4 +8,4 @@ onnxruntime>=1.17
 easyocr>=1.7
 ultralytics>=8.0
 timm>=1.0
-imageio-ffmpeg>=0.5
+static-ffmpeg>=2.0

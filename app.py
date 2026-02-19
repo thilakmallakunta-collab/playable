@@ -19,16 +19,15 @@ import analyzer
 # ── Find FFmpeg ───────────────────────────────────────────────────────────
 
 def _find_ffmpeg():
-    """Locate ffmpeg binary. Checks pip package, PATH, common Windows locations."""
-    # 1. Try imageio-ffmpeg (pip install imageio-ffmpeg)
+    """Locate ffmpeg binary. Checks pip packages, PATH, common Windows locations."""
+    # 1. Try static-ffmpeg (full build with all filters)
     try:
-        import imageio_ffmpeg
-        ff = imageio_ffmpeg.get_ffmpeg_exe()
-        if ff and Path(ff).exists():
-            ffprobe = str(Path(ff).parent / Path(ff).name.replace("ffmpeg", "ffprobe"))
-            if not Path(ffprobe).exists():
-                ffprobe = ff.replace("ffmpeg", "ffprobe")
-            return str(ff), ffprobe if Path(ffprobe).exists() else str(ff)
+        import static_ffmpeg
+        static_ffmpeg.add_paths()
+        ff = shutil.which("ffmpeg")
+        fp = shutil.which("ffprobe")
+        if ff:
+            return ff, fp or ff
     except Exception:
         pass
 
@@ -36,7 +35,16 @@ def _find_ffmpeg():
     if shutil.which("ffmpeg"):
         return "ffmpeg", "ffprobe"
 
-    # 3. Common Windows install locations
+    # 3. Try imageio-ffmpeg (minimal build, fallback)
+    try:
+        import imageio_ffmpeg
+        ff = imageio_ffmpeg.get_ffmpeg_exe()
+        if ff and Path(ff).exists():
+            return str(ff), str(ff)
+    except Exception:
+        pass
+
+    # 4. Common Windows install locations
     if sys.platform == "win32":
         common_paths = [
             Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "ffmpeg" / "bin",
@@ -409,15 +417,15 @@ def _export_ffmpeg(input_path, output_path, colors, text_edits, image_edits):
             inp = idx + 1
             ox, oy = ie.get("x", 0), ie.get("y", 0)
             ow, oh = ie.get("width", 200), ie.get("height", 200)
+            t_start = ie.get("startTime", 0)
+            t_end = ie.get("endTime", 9999)
 
-            cover = (
-                f"[{inp}:v]scale={ow}:{oh}[ov{idx}]"
-            )
-            segs.append(cover)
+            segs.append(f"[{inp}:v]scale={ow}:{oh}[ov{idx}]")
 
             src = f"[v{idx}]" if idx > 0 else "[base]"
             dst = f"[v{idx + 1}]"
-            segs.append(f"{src}[ov{idx}]overlay={ox}:{oy}{dst}")
+            enable = f"enable='between(t\\,{t_start}\\,{t_end})'"
+            segs.append(f"{src}[ov{idx}]overlay={ox}:{oy}:{enable}{dst}")
 
         last = f"v{len(valid_imgs)}"
         if text_filters:
@@ -552,10 +560,14 @@ def _build_text_filters(text_edits: list) -> list[str]:
         font_color = te.get("fontColor", "white")
         font_style = te.get("fontStyle", "bold")
 
+        t_start = te.get("startTime", 0)
+        t_end = te.get("endTime", 9999)
+        enable = f"enable='between(t\\,{t_start}\\,{t_end})'"
+
         if cover_mode == "cover":
             filters.append(
                 f"drawbox=x={ox}:y={oy}:w={ow}:h={oh}:"
-                f"color={fill_color}:t=fill"
+                f"color={fill_color}:t=fill:{enable}"
             )
         elif cover_mode == "remove":
             pad = 2
@@ -563,7 +575,7 @@ def _build_text_filters(text_edits: list) -> list[str]:
             dy = max(0, oy - pad)
             dw = ow + pad * 2
             dh = oh + pad * 2
-            filters.append(f"delogo=x={dx}:y={dy}:w={dw}:h={dh}")
+            filters.append(f"delogo=x={dx}:y={dy}:w={dw}:h={dh}:{enable}")
 
         if not new_text.strip():
             continue
@@ -575,7 +587,7 @@ def _build_text_filters(text_edits: list) -> list[str]:
             f"drawtext=text='{new_text}':"
             f"{font_part}"
             f"fontsize={font_size}:fontcolor={font_color}:"
-            f"x={ox + 4}:y={oy + 2}"
+            f"x={ox + 4}:y={oy + 2}:{enable}"
         )
     return filters
 
