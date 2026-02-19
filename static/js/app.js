@@ -2,7 +2,6 @@ const App = {
     videoFilename: null,
     videoProbe: null,
     isPlaying: false,
-    analyzed: false,
 
     detectedTexts: [],
     detectedImages: [],
@@ -34,7 +33,6 @@ const App = {
         this.timelineSlider = document.getElementById("timeline-slider");
         this.timeDisplay = document.getElementById("time-display");
         this.exportBtn = document.getElementById("export-btn");
-        this.analyzeBtn = document.getElementById("analyze-btn");
         this.modalBackdrop = document.getElementById("export-modal");
         this.modalTitle = document.getElementById("modal-title");
         this.modalText = document.getElementById("modal-text");
@@ -64,9 +62,7 @@ const App = {
         document.querySelectorAll(".panel-tab").forEach(t =>
             t.addEventListener("click", () => this.switchTab(t.dataset.tab)));
 
-        this.analyzeBtn.addEventListener("click", () => this.analyzeFrame());
         this.exportBtn.addEventListener("click", () => this.exportVideo());
-
         this.bindColorControls();
     },
 
@@ -85,8 +81,10 @@ const App = {
             this.uploadScreen.style.display = "none";
             this.editorScreen.classList.add("active");
             this.exportBtn.disabled = false;
-            this.analyzeBtn.disabled = false;
-            this.toast("Video loaded!", "success");
+            this.renderBackgroundPanel();
+            this.renderTextPanel();
+            this.renderImagePanel();
+            this.toast("Video loaded! Use the tabs to analyze and edit.", "success");
         } catch (e) { this.toast("Upload failed: " + e.message, "error"); }
     },
 
@@ -156,30 +154,54 @@ const App = {
         ].join(" ");
     },
 
-    // ── Analyze frame ─────────────────────────────────────────────────
-    async analyzeFrame() {
-        const ts = this.videoEl.currentTime || 0;
-        const body = JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts });
-        const headers = { "Content-Type": "application/json" };
+    // ── Individual analyze functions (one at a time) ──────────────────
 
-        this.analyzeBtn.disabled = true;
-        this.analyzeBtn.innerHTML = '<span class="spinner"></span> Analyzing...';
+    async analyzeBackground() {
+        const btn = document.getElementById("analyze-bg-btn");
+        if (!btn || !this.videoFilename) return;
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Detecting background...';
 
         try {
-            const [bgRes, txtRes, imgRes] = await Promise.all([
-                fetch("/analyze/background", { method: "POST", body, headers }),
-                fetch("/analyze/text", { method: "POST", body, headers }),
-                fetch("/analyze/images", { method: "POST", body, headers }),
-            ]);
+            const ts = this.videoEl.currentTime || 0;
+            const res = await fetch("/analyze/background", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts }),
+            });
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.error);
 
-            const bgData = await bgRes.json();
-            const txtData = await txtRes.json();
-            const imgData = await imgRes.json();
+            this.backgroundData = d;
+            this.renderBackgroundPanel();
+            this.toast("Background detected!", "success");
+        } catch (e) {
+            this.toast("Background detection failed: " + e.message, "error");
+        }
 
-            this.backgroundData = bgData;
-            this.detectedTexts = txtData.texts || [];
-            this.detectedImages = imgData.images || [];
+        btn.disabled = false;
+        btn.textContent = "Re-analyze Background";
+    },
 
+    async analyzeText() {
+        const btn = document.getElementById("analyze-text-btn");
+        if (!btn || !this.videoFilename) return;
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Detecting text...';
+
+        try {
+            const ts = this.videoEl.currentTime || 0;
+            const res = await fetch("/analyze/text", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts }),
+            });
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.error);
+
+            this.detectedTexts = d.texts || [];
             this.textEdits = this.detectedTexts.map(t => ({
                 originalText: t.text,
                 newText: "",
@@ -190,6 +212,35 @@ const App = {
                 enabled: false,
             }));
 
+            this.renderTextPanel();
+            this.drawOverlay();
+            this.toast(`Found ${this.detectedTexts.length} text region(s)`, "success");
+        } catch (e) {
+            this.toast("Text detection failed: " + e.message, "error");
+        }
+
+        btn.disabled = false;
+        btn.textContent = "Re-analyze Text";
+    },
+
+    async analyzeImages() {
+        const btn = document.getElementById("analyze-img-btn");
+        if (!btn || !this.videoFilename) return;
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Detecting images...';
+
+        try {
+            const ts = this.videoEl.currentTime || 0;
+            const res = await fetch("/analyze/images", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts }),
+            });
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.error);
+
+            this.detectedImages = d.images || [];
             this.imageEdits = this.detectedImages.map(im => ({
                 x: im.x, y: im.y, width: im.width, height: im.height,
                 thumbnail: im.thumbnail,
@@ -198,37 +249,48 @@ const App = {
                 enabled: false,
             }));
 
-            this.analyzed = true;
-            this.renderBackgroundPanel();
-            this.renderTextPanel();
             this.renderImagePanel();
             this.drawOverlay();
-
-            this.toast(`Found: ${this.detectedTexts.length} text regions, ${this.detectedImages.length} image regions`, "success");
+            this.toast(`Found ${this.detectedImages.length} image region(s)`, "success");
         } catch (e) {
-            this.toast("Analysis failed: " + e.message, "error");
+            this.toast("Image detection failed: " + e.message, "error");
         }
 
-        this.analyzeBtn.disabled = false;
-        this.analyzeBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Analyze Frame`;
+        btn.disabled = false;
+        btn.textContent = "Re-analyze Images";
     },
 
     // ── Background panel ──────────────────────────────────────────────
     renderBackgroundPanel() {
         const c = document.getElementById("bg-panel-content");
+
+        let analyzeHtml = `
+            <div class="analyze-prompt">
+                <p class="section-info">Seek to the frame you want, then click the button below to detect the background.</p>
+                <button id="analyze-bg-btn" class="btn btn-analyze btn-full" onclick="App.analyzeBackground()">
+                    Detect Background
+                </button>
+            </div>
+        `;
+
         if (!this.backgroundData) {
-            c.innerHTML = '<p class="empty-msg">Click "Analyze Frame" to detect the background.</p>';
+            c.innerHTML = analyzeHtml;
             return;
         }
+
         c.innerHTML = `
+            ${analyzeHtml}
+            <div class="divider"></div>
             <div class="detection-preview">
                 <p class="section-label">Detected Foreground</p>
                 <img src="${this.backgroundData.foreground}" class="detection-img">
             </div>
             <div class="divider"></div>
             <div class="control-group">
-                <label><input type="checkbox" id="bg-enable" ${this.backgroundEdit.enabled ? "checked" : ""}>
-                Enable Background Replacement</label>
+                <label class="toggle-label">
+                    <input type="checkbox" id="bg-enable" ${this.backgroundEdit.enabled ? "checked" : ""}>
+                    <span class="toggle-text">Enable Background Replacement</span>
+                </label>
             </div>
             <div id="bg-options" style="display:${this.backgroundEdit.enabled ? "block" : "none"}">
                 <div class="control-group">
@@ -280,16 +342,25 @@ const App = {
     // ── Text panel ────────────────────────────────────────────────────
     renderTextPanel() {
         const c = document.getElementById("text-panel-content");
-        if (!this.analyzed) {
-            c.innerHTML = '<p class="empty-msg">Click "Analyze Frame" to detect text in the video.</p>';
-            return;
-        }
+
+        let analyzeHtml = `
+            <div class="analyze-prompt">
+                <p class="section-info">Seek to a frame with text, then click the button to detect it.</p>
+                <button id="analyze-text-btn" class="btn btn-analyze btn-full" onclick="App.analyzeText()">
+                    Detect Text
+                </button>
+            </div>
+        `;
+
         if (!this.detectedTexts.length) {
-            c.innerHTML = '<p class="empty-msg">No text detected in this frame. Try a different timestamp.</p>';
+            c.innerHTML = analyzeHtml;
+            if (this.textEdits.length === 0 && this.detectedTexts.length === 0 && document.getElementById("analyze-text-btn")) {
+                // keep just the analyze button
+            }
             return;
         }
 
-        c.innerHTML = this.textEdits.map((te, i) => `
+        let itemsHtml = this.textEdits.map((te, i) => `
             <div class="overlay-item ${te.enabled ? "item-active" : ""}">
                 <div class="overlay-item-header">
                     <label class="toggle-label">
@@ -298,7 +369,7 @@ const App = {
                     </label>
                 </div>
                 <div class="detected-value">Detected: <strong>"${this.escHtml(te.originalText)}"</strong></div>
-                <div class="detected-pos">Position: ${te.x}, ${te.y} &mdash; Size: ${te.width} x ${te.height}</div>
+                <div class="detected-pos">Position: ${te.x}, ${te.y} | Size: ${te.width} x ${te.height}</div>
                 <div class="edit-fields" style="display:${te.enabled ? "block" : "none"}" id="text-fields-${i}">
                     <div class="control-group">
                         <label>New Text</label>
@@ -326,6 +397,8 @@ const App = {
             </div>
         `).join("");
 
+        c.innerHTML = analyzeHtml + '<div class="divider"></div>' + itemsHtml;
+
         c.querySelectorAll(".text-enable-cb").forEach(cb => {
             cb.addEventListener("change", e => {
                 const i = +e.target.dataset.idx;
@@ -339,8 +412,7 @@ const App = {
             el.addEventListener("input", e => {
                 const i = +e.target.dataset.idx;
                 const k = e.target.dataset.key;
-                const v = (e.target.type === "number") ? +e.target.value : e.target.value;
-                this.textEdits[i][k] = v;
+                this.textEdits[i][k] = (e.target.type === "number") ? +e.target.value : e.target.value;
                 this.drawOverlay();
             });
         });
@@ -349,16 +421,22 @@ const App = {
     // ── Image panel ───────────────────────────────────────────────────
     renderImagePanel() {
         const c = document.getElementById("image-panel-content");
-        if (!this.analyzed) {
-            c.innerHTML = '<p class="empty-msg">Click "Analyze Frame" to detect images/objects in the video.</p>';
-            return;
-        }
+
+        let analyzeHtml = `
+            <div class="analyze-prompt">
+                <p class="section-info">Seek to a frame with images/logos, then click the button to detect them.</p>
+                <button id="analyze-img-btn" class="btn btn-analyze btn-full" onclick="App.analyzeImages()">
+                    Detect Images
+                </button>
+            </div>
+        `;
+
         if (!this.detectedImages.length) {
-            c.innerHTML = '<p class="empty-msg">No distinct image regions detected. Try a different timestamp.</p>';
+            c.innerHTML = analyzeHtml;
             return;
         }
 
-        c.innerHTML = this.imageEdits.map((ie, i) => `
+        let itemsHtml = this.imageEdits.map((ie, i) => `
             <div class="overlay-item ${ie.enabled ? "item-active" : ""}">
                 <div class="overlay-item-header">
                     <label class="toggle-label">
@@ -379,6 +457,8 @@ const App = {
                 </div>
             </div>
         `).join("");
+
+        c.innerHTML = analyzeHtml + '<div class="divider"></div>' + itemsHtml;
 
         c.querySelectorAll(".img-enable-cb").forEach(cb => {
             cb.addEventListener("change", e => {
@@ -427,13 +507,11 @@ const App = {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, cw, ch);
 
-        if (!this.analyzed) return;
-
         const vw = this.videoProbe?.width || this.videoEl.videoWidth || 1920;
         const vh = this.videoProbe?.height || this.videoEl.videoHeight || 1080;
         const sx = cw / vw, sy = ch / vh;
 
-        this.textEdits.forEach((te, i) => {
+        this.textEdits.forEach((te) => {
             const x = te.x * sx, y = te.y * sy, w = te.width * sx, h = te.height * sy;
             if (te.enabled) {
                 ctx.strokeStyle = "#6c5ce7";
@@ -462,21 +540,13 @@ const App = {
             }
         });
 
-        this.imageEdits.forEach((ie, i) => {
+        this.imageEdits.forEach((ie) => {
             const x = ie.x * sx, y = ie.y * sy, w = ie.width * sx, h = ie.height * sy;
-            if (ie.enabled) {
-                ctx.strokeStyle = "#00b894";
-                ctx.lineWidth = 2;
-                ctx.setLineDash([6, 3]);
-                ctx.strokeRect(x, y, w, h);
-                ctx.setLineDash([]);
-            } else {
-                ctx.strokeStyle = "rgba(0,184,148,0.4)";
-                ctx.lineWidth = 1;
-                ctx.setLineDash([4, 4]);
-                ctx.strokeRect(x, y, w, h);
-                ctx.setLineDash([]);
-            }
+            ctx.strokeStyle = ie.enabled ? "#00b894" : "rgba(0,184,148,0.4)";
+            ctx.lineWidth = ie.enabled ? 2 : 1;
+            ctx.setLineDash(ie.enabled ? [6, 3] : [4, 4]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.setLineDash([]);
         });
     },
 
@@ -486,14 +556,19 @@ const App = {
         const activeImgs = this.imageEdits.filter(i => i.enabled && i.replacementFilename);
         const bgActive = this.backgroundEdit.enabled;
 
-        if (!bgActive && !activeTexts.length && !activeImgs.length &&
-            !Object.values(this.colors).some(v => v !== 0 && v !== 1)) {
-            this.toast("Nothing to change — adjust some settings first.", "info");
+        const hasColorChange = Object.entries(this.colors).some(([k, v]) =>
+            k.startsWith("gamma") ? v !== 1 : v !== 0
+        );
+
+        if (!bgActive && !activeTexts.length && !activeImgs.length && !hasColorChange) {
+            this.toast("Nothing to change. Adjust some settings first.", "info");
             return;
         }
 
         this.showModal("Exporting Video",
-            bgActive ? "Replacing background frame-by-frame. This may take several minutes..." : "Rendering your modified video...",
+            bgActive
+                ? "Replacing background frame-by-frame. This may take several minutes for longer videos..."
+                : "Rendering your modified video...",
             true);
 
         const payload = {

@@ -114,59 +114,74 @@ def analyze_frame():
 @app.route("/analyze/background", methods=["POST"])
 def analyze_background():
     """Segment the background from the foreground."""
-    data = request.get_json()
-    fname = data.get("videoFilename")
-    ts = float(data.get("timestamp", 0))
+    try:
+        data = request.get_json()
+        fname = data.get("videoFilename")
+        ts = float(data.get("timestamp", 0))
 
-    path = UPLOAD_FOLDER / fname
-    if not path.exists():
-        return jsonify(error="Video not found"), 404
+        path = UPLOAD_FOLDER / fname
+        if not path.exists():
+            return jsonify(error="Video not found"), 404
 
-    frame = analyzer.extract_frame(path, ts)
-    result = analyzer.detect_background(frame)
-    return jsonify(result)
+        frame = analyzer.extract_frame(path, ts)
+        result = analyzer.detect_background(frame)
+        return jsonify(result)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify(error=f"Background analysis failed: {e}"), 500
 
 
 @app.route("/analyze/text", methods=["POST"])
 def analyze_text():
     """Run OCR on the frame."""
-    data = request.get_json()
-    fname = data.get("videoFilename")
-    ts = float(data.get("timestamp", 0))
+    try:
+        data = request.get_json()
+        fname = data.get("videoFilename")
+        ts = float(data.get("timestamp", 0))
 
-    path = UPLOAD_FOLDER / fname
-    if not path.exists():
-        return jsonify(error="Video not found"), 404
+        path = UPLOAD_FOLDER / fname
+        if not path.exists():
+            return jsonify(error="Video not found"), 404
 
-    frame = analyzer.extract_frame(path, ts)
-    regions = analyzer.detect_text(frame)
-    return jsonify(
-        texts=regions,
-        frame=analyzer.frame_to_data_uri(frame),
-        width=frame.width,
-        height=frame.height,
-    )
+        frame = analyzer.extract_frame(path, ts)
+        regions = analyzer.detect_text(frame)
+        return jsonify(
+            texts=regions,
+            frame=analyzer.frame_to_data_uri(frame),
+            width=frame.width,
+            height=frame.height,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify(error=f"Text analysis failed: {e}"), 500
 
 
 @app.route("/analyze/images", methods=["POST"])
 def analyze_images():
     """Detect image / object regions."""
-    data = request.get_json()
-    fname = data.get("videoFilename")
-    ts = float(data.get("timestamp", 0))
+    try:
+        data = request.get_json()
+        fname = data.get("videoFilename")
+        ts = float(data.get("timestamp", 0))
 
-    path = UPLOAD_FOLDER / fname
-    if not path.exists():
-        return jsonify(error="Video not found"), 404
+        path = UPLOAD_FOLDER / fname
+        if not path.exists():
+            return jsonify(error="Video not found"), 404
 
-    frame = analyzer.extract_frame(path, ts)
-    regions = analyzer.detect_images(frame)
-    return jsonify(
-        images=regions,
-        frame=analyzer.frame_to_data_uri(frame),
-        width=frame.width,
-        height=frame.height,
-    )
+        frame = analyzer.extract_frame(path, ts)
+        regions = analyzer.detect_images(frame)
+        return jsonify(
+            images=regions,
+            frame=analyzer.frame_to_data_uri(frame),
+            width=frame.width,
+            height=frame.height,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify(error=f"Image analysis failed: {e}"), 500
 
 
 # ── Export ─────────────────────────────────────────────────────────────────
