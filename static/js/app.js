@@ -403,6 +403,43 @@ const App = {
     // TEXT
     // ═══════════════════════════════════════════════════════════════════
 
+    removeAllDetectedText() {
+        this.textEdits.forEach(te => {
+            if (!te.isCustom) {
+                te.enabled = true;
+                te.coverMode = "remove";
+                te.newText = "";
+            }
+        });
+        this.showOverlay = true;
+        this.renderTextPanel();
+        this.drawOverlay();
+        this.toast("All detected text marked for removal. Click Export to apply.", "success");
+    },
+
+    addNewTextBox() {
+        const vw = this.videoProbe?.width || 1280;
+        const vh = this.videoProbe?.height || 720;
+        this.textEdits.push({
+            originalText: "", newText: "Your text here",
+            x: Math.round(vw * 0.1), y: Math.round(vh * 0.1),
+            width: 300, height: 50,
+            fontSize: 36, fontColor: "#ffffff", fillColor: "#000000",
+            coverMode: "transparent",
+            fontStyle: "bold", fontFamily: "sans-serif",
+            enabled: true, isCustom: true,
+        });
+        this.showOverlay = true;
+        this.renderTextPanel();
+        this.drawOverlay();
+    },
+
+    removeTextEdit(idx) {
+        this.textEdits.splice(idx, 1);
+        this.renderTextPanel();
+        this.drawOverlay();
+    },
+
     async analyzeText() {
         const btn = document.getElementById("analyze-text-btn");
         if (!btn) return;
@@ -443,16 +480,21 @@ const App = {
 
         let html = `
             <div class="analyze-prompt">
-                <p class="section-info">Detect text in the current frame.</p>
+                <p class="section-info">Detect text in the current frame, or add your own text box.</p>
                 <div class="engine-badge ${engineClass}">Engine: ${engine}</div>
-                <button id="analyze-text-btn" class="btn btn-analyze btn-full" onclick="App.analyzeText()">Detect Text</button>
+                <button id="analyze-text-btn" class="btn btn-analyze btn-full" onclick="App.analyzeText()" style="margin-bottom:8px">Detect Text</button>
+                <button class="btn btn-secondary btn-full" onclick="App.addNewTextBox()">+ Add New Text Box</button>
             </div>
         `;
 
         if (this.textEdits.length) {
-            // Toggle for showing overlay
+            const detectedCount = this.textEdits.filter(t => t.originalText && !t.isCustom).length;
             html += `
                 <div class="divider"></div>
+                <div class="quick-actions">
+                    ${detectedCount ? `<button class="btn btn-danger btn-sm" onclick="App.removeAllDetectedText()">Remove All Detected Text</button>` : ""}
+                    <button class="btn btn-secondary btn-sm" onclick="App.addNewTextBox()">+ Add New Text Box</button>
+                </div>
                 <label class="toggle-label overlay-toggle">
                     <input type="checkbox" id="text-overlay-toggle" ${this.showOverlay ? "checked" : ""}>
                     <span class="toggle-text">Show detection boxes on video</span>
@@ -460,22 +502,59 @@ const App = {
             `;
 
             this.textEdits.forEach((te, i) => {
+                const isCustom = te.isCustom;
+                const title = isCustom ? `New Text #${i + 1}` : `Text #${i + 1}`;
+                const detectedInfo = isCustom ? "" : `
+                    <div class="detected-value">"${this.escHtml(te.originalText)}"</div>
+                    <div class="detected-pos">${te.x}, ${te.y} &mdash; ${te.width}x${te.height}</div>
+                `;
+                const positionFields = isCustom ? `
+                    <div class="inline-fields">
+                        <div class="control-group">
+                            <label>X Position</label>
+                            <input type="number" class="number-input" value="${te.x}" data-idx="${i}" data-key="x" min="0">
+                        </div>
+                        <div class="control-group">
+                            <label>Y Position</label>
+                            <input type="number" class="number-input" value="${te.y}" data-idx="${i}" data-key="y" min="0">
+                        </div>
+                    </div>
+                ` : "";
+                const oldTextHandling = isCustom ? "" : `
+                    <div class="control-group">
+                        <label>Old Text Handling</label>
+                        <select class="text-input cover-mode-select" data-idx="${i}">
+                            <option value="cover" ${te.coverMode === "cover" ? "selected" : ""}>Cover with color</option>
+                            <option value="remove" ${te.coverMode === "remove" ? "selected" : ""}>Remove old text, then write new</option>
+                            <option value="transparent" ${te.coverMode === "transparent" ? "selected" : ""}>Write over (keep old text visible)</option>
+                        </select>
+                    </div>
+                    <div class="cover-color-row" style="display:${te.coverMode === "cover" ? "block" : "none"}">
+                        <div class="control-group">
+                            <label>Cover Color</label>
+                            <input type="color" value="${te.fillColor}" data-idx="${i}" data-key="fillColor">
+                        </div>
+                    </div>
+                `;
+                const deleteBtn = isCustom ? `<button class="btn btn-danger btn-sm" onclick="App.removeTextEdit(${i})">Delete</button>` : "";
+
                 html += `
                 <div class="overlay-item ${te.enabled ? "item-active" : ""}">
                     <div class="overlay-item-header">
                         <label class="toggle-label">
                             <input type="checkbox" data-idx="${i}" class="text-enable-cb" ${te.enabled ? "checked" : ""}>
-                            <h4>Text #${i + 1}</h4>
+                            <h4>${title}</h4>
                         </label>
+                        ${deleteBtn}
                     </div>
-                    <div class="detected-value">"${this.escHtml(te.originalText)}"</div>
-                    <div class="detected-pos">${te.x}, ${te.y} &mdash; ${te.width}x${te.height}</div>
+                    ${detectedInfo}
                     <div class="edit-fields" style="display:${te.enabled ? "block" : "none"}">
                         <div class="control-group">
-                            <label>New Text</label>
+                            <label>${isCustom ? "Text" : "New Text"}</label>
                             <input type="text" class="text-input" value="${this.escHtml(te.newText)}"
-                                data-idx="${i}" data-key="newText" placeholder="Replacement text...">
+                                data-idx="${i}" data-key="newText" placeholder="${isCustom ? "Your text here..." : "Replacement text..."}">
                         </div>
+                        ${positionFields}
                         <div class="inline-fields">
                             <div class="control-group">
                                 <label>Font Size</label>
@@ -508,20 +587,7 @@ const App = {
                                 </select>
                             </div>
                         </div>
-                        <div class="control-group">
-                            <label>Old Text Handling</label>
-                            <select class="text-input cover-mode-select" data-idx="${i}">
-                                <option value="cover" ${te.coverMode === "cover" ? "selected" : ""}>Cover with color</option>
-                                <option value="remove" ${te.coverMode === "remove" ? "selected" : ""}>Remove old text, then write new</option>
-                                <option value="transparent" ${te.coverMode === "transparent" ? "selected" : ""}>Write over (keep old text visible)</option>
-                            </select>
-                        </div>
-                        <div class="cover-color-row" style="display:${te.coverMode === "cover" ? "block" : "none"}">
-                            <div class="control-group">
-                                <label>Cover Color</label>
-                                <input type="color" value="${te.fillColor}" data-idx="${i}" data-key="fillColor">
-                            </div>
-                        </div>
+                        ${oldTextHandling}
                     </div>
                 </div>`;
             });
@@ -894,7 +960,7 @@ const App = {
     // ═══════════════════════════════════════════════════════════════════
 
     async exportVideo() {
-        const activeTexts = this.textEdits.filter(t => t.enabled && t.newText.trim());
+        const activeTexts = this.textEdits.filter(t => t.enabled && (t.newText.trim() || t.coverMode === "remove"));
         const allImgEdits = [...this.imageEdits, ...this.videoScanEdits];
         const activeImgs = allImgEdits.filter(i => i.enabled && i.replacementFilename);
         const bgActive = this.backgroundEdit.enabled;
