@@ -314,6 +314,34 @@ def analyze_custom_search():
         return jsonify(error=f"Custom search failed: {e}"), 500
 
 
+@app.route("/analyze/track", methods=["POST"])
+def analyze_track():
+    """Track an object across frames."""
+    try:
+        data = request.get_json()
+        fname = data.get("videoFilename")
+        bbox = data.get("bbox")
+        t_start = float(data.get("startTime", 0))
+        t_end = float(data.get("endTime", -1))
+
+        if not bbox:
+            return jsonify(error="No bounding box provided"), 400
+
+        path = UPLOAD_FOLDER / fname
+        if not path.exists():
+            return jsonify(error="Video not found"), 404
+
+        positions = analyzer.track_object(path, bbox, t_start, t_end)
+        return jsonify(
+            positions=positions,
+            count=len(positions),
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify(error=f"Tracking failed: {e}"), 500
+
+
 @app.route("/analyze/video-scan", methods=["POST"])
 def analyze_video_scan():
     """Scan entire video for objects/images across all frames."""
@@ -360,11 +388,13 @@ def export_video():
 
     try:
         if not (shutil.which(FFMPEG) or Path(FFMPEG).exists()):
-            return jsonify(error="FFmpeg is not installed. Install it from https://www.gyan.dev/ffmpeg/builds/ and add to PATH, then restart the app."), 500
+            return jsonify(error="FFmpeg is not installed. Run: python -m pip install static-ffmpeg"), 500
 
-        if bg_edit and bg_edit.get("enabled"):
-            _export_with_bg_replace(input_path, output_path, colors,
-                                    text_edits, image_edits, bg_edit)
+        has_tracked = any(ie.get("tracked") and ie.get("positions") for ie in image_edits)
+
+        if has_tracked or (bg_edit and bg_edit.get("enabled")):
+            _export_frame_by_frame(input_path, output_path, colors,
+                                   text_edits, image_edits, bg_edit)
         else:
             _export_ffmpeg(input_path, output_path, colors,
                            text_edits, image_edits)
@@ -445,34 +475,43 @@ def _export_ffmpeg(input_path, output_path, colors, text_edits, image_edits):
         raise RuntimeError(r.stderr[-800:])
 
 
-# ── Frame-by-frame export (slow path, with bg replace) ───────────────────
+# ── Frame-by-frame export (bg replace + tracked image overlays) ───────────
 
-def _export_with_bg_replace(input_path, output_path, colors, text_edits,
-                            image_edits, bg_edit):
-    probe = _probe(input_path)
+def _export_frame_by_frame(input_path, output_path, colors, text_edits,
+                           image_edits, bg_edit):
     fps = _get_fps(input_path)
-    w = probe.get("width", 0)
-    h = probe.get("height", 0)
-    if not w or not h:
-        raise RuntimeError("Could not determine video dimensions")
 
+    do_bg = bg_edit and bg_edit.get("enabled")
     bg_color = None
     bg_img = None
-    if bg_edit.get("color"):
-        hex_c = bg_edit["color"].lstrip("#")
-        bg_color = tuple(int(hex_c[i:i+2], 16) for i in (0, 2, 4))
-    if bg_edit.get("imageFilename"):
-        bg_path = UPLOAD_FOLDER / bg_edit["imageFilename"]
-        if bg_path.exists():
-            bg_img = Image.open(bg_path).convert("RGB")
+    if do_bg:
+        if bg_edit.get("color"):
+            hex_c = bg_edit["color"].lstrip("#")
+            bg_color = tuple(int(hex_c[i:i+2], 16) for i in (0, 2, 4))
+        if bg_edit.get("imageFilename"):
+            bg_path = UPLOAD_FOLDER / bg_edit["imageFilename"]
+            if bg_path.exists():
+                bg_img = Image.open(bg_path).convert("RGB")
 
-    replacement_imgs = {}
+    replacements = []
     for ie in image_edits:
         rp = ie.get("replacementFilename")
-        if rp and (UPLOAD_FOLDER / rp).exists():
-            ri = Image.open(UPLOAD_FOLDER / rp).convert("RGBA")
-            ri = ri.resize((ie.get("width", 200), ie.get("height", 200)))
-            replacement_imgs[id(ie)] = (ie, ri)
+        if not rp or not (UPLOAD_FOLDER / rp).exists():
+            continue
+        ri = Image.open(UPLOAD_FOLDER / rp).convert("RGBA")
+        positions = ie.get("positions")
+        t_start = ie.get("startTime", 0)
+        t_end = ie.get("endTime", 9999)
+        base_w = ie.get("width", 200)
+        base_h = ie.get("height", 200)
+        replacements.append({
+            "image": ri,
+            "positions": positions,
+            "tracked": bool(positions),
+            "x": ie.get("x", 0), "y": ie.get("y", 0),
+            "width": base_w, "height": base_h,
+            "startTime": t_start, "endTime": t_end,
+        })
 
     tmpdir = Path(tempfile.mkdtemp())
     try:
@@ -483,12 +522,26 @@ def _export_with_bg_replace(input_path, output_path, colors, text_edits,
             if not ok:
                 break
 
+            current_time = frame_idx / fps
             pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-            pil = analyzer.replace_background_frame(pil, bg_color=bg_color, bg_image=bg_img)
 
-            for key, (ie, ri) in replacement_imgs.items():
-                ox, oy = ie.get("x", 0), ie.get("y", 0)
-                pil.paste(ri, (int(ox), int(oy)), ri)
+            if do_bg:
+                pil = analyzer.replace_background_frame(pil, bg_color=bg_color, bg_image=bg_img)
+
+            for repl in replacements:
+                if current_time < repl["startTime"] or current_time > repl["endTime"]:
+                    continue
+
+                if repl["tracked"] and repl["positions"]:
+                    pos = _find_tracked_position(repl["positions"], frame_idx, current_time)
+                    px, py = pos["x"], pos["y"]
+                    pw, ph = pos["width"], pos["height"]
+                else:
+                    px, py = repl["x"], repl["y"]
+                    pw, ph = repl["width"], repl["height"]
+
+                ri = repl["image"].resize((max(1, int(pw)), max(1, int(ph))))
+                pil.paste(ri, (int(px), int(py)), ri)
 
             out_arr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
             cv2.imwrite(str(tmpdir / f"{frame_idx:06d}.png"), out_arr)
@@ -517,6 +570,14 @@ def _export_with_bg_replace(input_path, output_path, colors, text_edits,
             raise RuntimeError(r.stderr[-800:])
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _find_tracked_position(positions, frame_idx, current_time):
+    for pos in positions:
+        if pos["frame"] == frame_idx:
+            return pos
+    closest = min(positions, key=lambda p: abs(p["time"] - current_time))
+    return closest
 
 
 # ── Filter builders ───────────────────────────────────────────────────────

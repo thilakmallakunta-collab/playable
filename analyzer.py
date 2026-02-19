@@ -655,3 +655,174 @@ def _fmt_time(s):
     m = int(s // 60)
     sec = int(s % 60)
     return f"{m}:{sec:02d}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5. OBJECT TRACKING (follow objects across frames)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def track_object(video_path: str | Path, bbox: dict,
+                 start_time: float = 0, end_time: float = -1) -> list[dict]:
+    """
+    Track an object defined by *bbox* (x, y, width, height) starting at
+    *start_time*.  Returns a list of {frame, time, x, y, width, height, tracked}
+    for every frame in the range.
+    """
+    cap = cv2.VideoCapture(str(video_path))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps
+
+    if end_time <= 0:
+        end_time = duration
+
+    cap.set(cv2.CAP_PROP_POS_MSEC, start_time * 1000)
+    ok, init_frame = cap.read()
+    if not ok:
+        cap.release()
+        return []
+
+    x, y, w, h = int(bbox["x"]), int(bbox["y"]), int(bbox["width"]), int(bbox["height"])
+
+    if hasattr(cv2, "TrackerCSRT"):
+        tracker = cv2.TrackerCSRT.create()
+    elif hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerCSRT"):
+        tracker = cv2.legacy.TrackerCSRT_create()
+    elif hasattr(cv2, "TrackerMIL"):
+        tracker = cv2.TrackerMIL.create()
+    else:
+        raise RuntimeError("No object tracker available. Install opencv-contrib-python-headless.")
+    tracker.init(init_frame, (x, y, w, h))
+
+    positions = []
+    frame_idx = 0
+    current_time = start_time
+
+    while current_time <= end_time:
+        ok, frame = cap.read()
+        if not ok:
+            break
+
+        current_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+        if current_time > end_time:
+            break
+
+        success, box = tracker.update(frame)
+
+        if success:
+            bx, by, bw, bh = [int(v) for v in box]
+            positions.append({
+                "frame": frame_idx,
+                "time": round(current_time, 3),
+                "x": bx, "y": by, "width": bw, "height": bh,
+                "tracked": True,
+            })
+        else:
+            positions.append({
+                "frame": frame_idx,
+                "time": round(current_time, 3),
+                "x": x, "y": y, "width": w, "height": h,
+                "tracked": False,
+            })
+
+        frame_idx += 1
+
+    cap.release()
+    return positions
+
+
+def export_with_tracking(
+    video_path: str | Path,
+    output_path: str | Path,
+    tracked_replacements: list[dict],
+    text_edits: list[dict] = None,
+    colors: dict = None,
+):
+    """
+    Frame-by-frame export with tracked object replacements.
+
+    *tracked_replacements* is a list of dicts:
+        { positions: [...], replacement_image: PIL.Image, width, height }
+    """
+    cap = cv2.VideoCapture(str(video_path))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    import tempfile
+    tmpdir = Path(tempfile.mkdtemp())
+
+    try:
+        frame_idx = 0
+        while True:
+            ok, bgr = cap.read()
+            if not ok:
+                break
+
+            current_time = frame_idx / fps
+            pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+
+            for repl in tracked_replacements:
+                positions = repl["positions"]
+                ri = repl["replacement_image"]
+                t_start = repl.get("startTime", 0)
+                t_end = repl.get("endTime", 9999)
+
+                if current_time < t_start or current_time > t_end:
+                    continue
+
+                pos = _get_position_at_frame(positions, frame_idx, current_time)
+                if pos:
+                    rw, rh = pos["width"], pos["height"]
+                    ri_resized = ri.resize((max(1, rw), max(1, rh)))
+                    px, py = pos["x"], pos["y"]
+                    if ri_resized.mode == "RGBA":
+                        pil.paste(ri_resized, (px, py), ri_resized)
+                    else:
+                        pil.paste(ri_resized, (px, py))
+
+            out_arr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+            cv2.imwrite(str(tmpdir / f"{frame_idx:06d}.png"), out_arr)
+            frame_idx += 1
+
+        cap.release()
+
+        import subprocess, shutil as _shutil
+        ffmpeg_cmd = _shutil.which("ffmpeg") or "ffmpeg"
+        try:
+            import static_ffmpeg
+            static_ffmpeg.add_paths()
+            ffmpeg_cmd = _shutil.which("ffmpeg") or ffmpeg_cmd
+        except Exception:
+            pass
+
+        cmd = [
+            ffmpeg_cmd, "-y",
+            "-framerate", str(fps),
+            "-i", str(tmpdir / "%06d.png"),
+            "-i", str(video_path),
+            "-map", "0:v", "-map", "1:a?",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-shortest",
+            str(output_path),
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr[-500:])
+    finally:
+        import shutil as _shutil2
+        _shutil2.rmtree(tmpdir, ignore_errors=True)
+
+
+def _get_position_at_frame(positions, frame_idx, current_time):
+    """Find the tracked position for a given frame, with interpolation."""
+    if not positions:
+        return None
+
+    for pos in positions:
+        if pos["frame"] == frame_idx:
+            return pos
+
+    closest = min(positions, key=lambda p: abs(p["time"] - current_time))
+    return closest

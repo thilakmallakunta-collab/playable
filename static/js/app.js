@@ -879,7 +879,12 @@ const App = {
                                     data-prefix="${prefix}" data-idx="${i}" data-key="endTime">
                             </div>
                         </div>
-                        <div class="time-hint">Replacement active ${ie.startTime}s – ${ie.endTime}s</div>
+                        <div class="control-group" style="margin-top:8px">
+                            <button class="btn btn-secondary btn-sm obj-track-btn" data-prefix="${prefix}" data-idx="${i}">
+                                ${ie.tracked ? "✓ Tracked (" + (ie.positions?.length || 0) + " frames)" : "Track Movement"}
+                            </button>
+                            <div class="time-hint">${ie.tracked ? "Replacement will follow the object's movement" : "Track this object so the replacement follows its movement"}</div>
+                        </div>
                         ` : ""}
                     </div>
                 </div>`;
@@ -909,6 +914,39 @@ const App = {
                 edits[idx][key] = +e.target.value;
             });
         });
+        container.querySelectorAll(`.obj-track-btn[data-prefix="${prefix}"]`).forEach(btn => {
+            btn.addEventListener("click", e => {
+                const idx = +e.target.dataset.idx;
+                this._trackObject(edits, idx);
+            });
+        });
+    },
+
+    async _trackObject(edits, idx) {
+        const ie = edits[idx];
+        this.toast("Tracking object movement...", "info");
+
+        try {
+            const res = await fetch("/analyze/track", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    videoFilename: this.videoFilename,
+                    bbox: { x: ie.x, y: ie.y, width: ie.width, height: ie.height },
+                    startTime: ie.startTime || 0,
+                    endTime: ie.endTime || -1,
+                }),
+            });
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.error);
+
+            ie.tracked = true;
+            ie.positions = d.positions;
+            this.renderImagePanel();
+            this.toast(`Tracked across ${d.count} frames!`, "success");
+        } catch (e) {
+            this.toast("Tracking failed: " + e.message, "error");
+        }
     },
 
     async _uploadReplacementFor(edits, idx) {
