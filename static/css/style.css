@@ -316,6 +316,13 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
     font-weight: 500;
 }
 
+.custom-search-row {
+    display: flex; gap: 8px; align-items: center;
+}
+
+.custom-search-row input { flex: 1; }
+.custom-search-row .btn { flex-shrink: 0; white-space: nowrap; }
+
 .category-header {
     font-size: 0.78rem; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.5px; color: var(--text-secondary);

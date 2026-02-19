@@ -621,6 +621,47 @@ const App = {
         btn.textContent = "Re-scan Full Video";
     },
 
+    async customSearch() {
+        const input = document.getElementById("custom-search-input");
+        const btn = document.getElementById("custom-search-btn");
+        if (!input || !input.value.trim()) {
+            this.toast("Type what you want to find, e.g. trophy, medal, logo", "info");
+            return;
+        }
+
+        const terms = input.value.split(",").map(s => s.trim()).filter(Boolean);
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span>';
+
+        try {
+            const ts = this.videoEl.currentTime || 0;
+            const res = await fetch("/analyze/custom-search", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ videoFilename: this.videoFilename, timestamp: ts, searchTerms: terms }),
+            });
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.error);
+
+            const newEdits = (d.objects || []).map(obj => ({
+                x: obj.x, y: obj.y, width: obj.width, height: obj.height,
+                label: obj.label, category: obj.category || "custom",
+                confidence: obj.confidence || 0, source: obj.source || "yolo-world",
+                thumbnail: obj.thumbnail,
+                replacementFilename: null, replacementUrl: null, enabled: false,
+            }));
+
+            this.imageEdits = [...this.imageEdits, ...newEdits];
+            this.renderImagePanel();
+            this.toast(`Custom search found ${d.count} result(s) for: ${terms.join(", ")}`, "success");
+        } catch (e) {
+            this.toast("Custom search failed: " + e.message, "error");
+        }
+
+        btn.disabled = false;
+        btn.textContent = "Search";
+    },
+
     renderImagePanel() {
         const c = document.getElementById("image-panel-content");
         const hasYolo = this.features.yolo;
@@ -633,7 +674,7 @@ const App = {
                 <button id="analyze-img-btn" class="btn btn-analyze btn-full" onclick="App.analyzeImages()" style="margin-bottom:8px">
                     Detect in Current Frame
                 </button>
-                <div class="scan-row">
+                <div class="scan-row" style="margin-bottom:8px">
                     <button id="scan-video-btn" class="btn btn-primary btn-full" onclick="App.scanFullVideo()">
                         Scan Entire Video
                     </button>
@@ -643,6 +684,13 @@ const App = {
                         <option value="2">Every 2s</option>
                         <option value="5">Every 5s</option>
                     </select>
+                </div>
+                <div class="divider-sm"></div>
+                <p class="section-label">Custom Object Search</p>
+                <p class="section-info">Type any objects to find — trophy, medal, logo, jersey, crown, etc.</p>
+                <div class="custom-search-row">
+                    <input type="text" id="custom-search-input" class="text-input" placeholder="e.g. trophy, medal, logo, flag, banner">
+                    <button id="custom-search-btn" class="btn btn-analyze" onclick="App.customSearch()">Search</button>
                 </div>
             </div>
         `;

@@ -261,6 +261,35 @@ def analyze_images():
         return jsonify(error=f"Image analysis failed: {e}"), 500
 
 
+@app.route("/analyze/custom-search", methods=["POST"])
+def analyze_custom_search():
+    """Search for any objects by text description using YOLO-World."""
+    try:
+        data = request.get_json()
+        fname = data.get("videoFilename")
+        ts = float(data.get("timestamp", 0))
+        search_terms = data.get("searchTerms", [])
+
+        if not search_terms:
+            return jsonify(error="No search terms provided"), 400
+
+        path = UPLOAD_FOLDER / fname
+        if not path.exists():
+            return jsonify(error="Video not found"), 404
+
+        frame = analyzer.extract_frame(path, ts)
+        results = analyzer.detect_custom_objects(frame, search_terms)
+        return jsonify(
+            objects=results,
+            count=len(results),
+            searchTerms=search_terms,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify(error=f"Custom search failed: {e}"), 500
+
+
 @app.route("/analyze/video-scan", methods=["POST"])
 def analyze_video_scan():
     """Scan entire video for objects/images across all frames."""

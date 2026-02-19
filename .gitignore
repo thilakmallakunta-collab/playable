@@ -3,6 +3,4 @@ exports/
 __pycache__/
 *.pyc
 .env
-yolov8m.pt
-yolov8m-seg.pt
-yolov8n.pt
+*.pt

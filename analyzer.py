@@ -272,7 +272,7 @@ def _merge_text_boxes(bboxes, img_w, img_h):
 # ═══════════════════════════════════════════════════════════════════════════
 
 _yolo_det_model = None
-_yolo_seg_model = None
+_yolo_world_model = None
 _rembg_session = None
 
 YOLO_CATEGORIES = {
@@ -308,16 +308,43 @@ def detect_images(frame: Image.Image) -> list[dict]:
 
 
 def _detect_yolo(frame: Image.Image) -> list[dict]:
-    global _yolo_det_model, _yolo_seg_model
+    global _yolo_det_model
 
     if _yolo_det_model is None:
-        model_path = "yolov8m.pt" if Path("yolov8m.pt").exists() else "yolov8n.pt"
-        _yolo_det_model = _YOLO(model_path)
+        for model_name in ["yolo11x.pt", "yolov8x.pt", "yolov8m.pt", "yolov8n.pt"]:
+            if Path(model_name).exists():
+                _yolo_det_model = _YOLO(model_name)
+                log.info(f"Loaded {model_name}")
+                break
+        if _yolo_det_model is None:
+            _yolo_det_model = _YOLO("yolo11x.pt")
 
     arr = np.array(frame)
+    preds = _yolo_det_model(arr, verbose=False, conf=0.12, iou=0.4)
 
-    preds = _yolo_det_model(arr, verbose=False, conf=0.15, iou=0.4)
+    return _parse_yolo_results(preds, frame)
 
+
+def detect_custom_objects(frame: Image.Image, search_terms: list[str]) -> list[dict]:
+    """
+    Open-vocabulary detection: find ANY object described by text.
+    Uses YOLO-World to search for custom categories like 'trophy',
+    'medal', 'logo', 'jersey', etc.
+    """
+    global _yolo_world_model
+
+    if _yolo_world_model is None:
+        _yolo_world_model = _YOLO("yolov8x-worldv2.pt")
+
+    _yolo_world_model.set_classes(search_terms)
+
+    arr = np.array(frame)
+    preds = _yolo_world_model(arr, verbose=False, conf=0.08)
+
+    return _parse_yolo_results(preds, frame, source="yolo-world")
+
+
+def _parse_yolo_results(preds, frame, source="yolo"):
     detected = []
     for result in preds:
         for box in result.boxes:
@@ -340,7 +367,7 @@ def _detect_yolo(frame: Image.Image) -> list[dict]:
                 "label": label,
                 "category": category,
                 "confidence": round(conf, 3),
-                "source": "yolo",
+                "source": source,
                 "thumbnail": frame_to_data_uri(thumb, fmt="JPEG", quality=70),
             })
     return detected
